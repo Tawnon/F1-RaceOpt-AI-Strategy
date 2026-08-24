@@ -40,6 +40,11 @@
              {% if request.endpoint == 'play_strategy_page' %}bg-slate-800 text-emerald-300 font-semibold{% else %}hover:bg-slate-800 hover:text-slate-200 text-slate-400{% endif %}">
             ⚙️ Custom Strategy
           </a>
+          <a href="{{ url_for('forecast_page') }}"
+             class="px-3 py-1.5 rounded-lg transition
+             {% if request.endpoint == 'forecast_page' %}bg-slate-800 text-emerald-300 font-semibold{% else %}hover:bg-slate-800 hover:text-slate-200 text-slate-400{% endif %}">
+            🔮 Future Standings
+          </a>
         </div>
       </div>
     </nav>

@@ -1,8 +1,11 @@
 # app.py
 from flask import Flask, render_template, request
-import pickle, math
+import pickle, math, re
+from datetime import date, datetime
+from functools import lru_cache
 import numpy as np
 import pandas as pd
+import fastf1
 
 from data_pipeline import load_race_laps, AVAILABLE_RACES, AVAILABLE_DRIVERS
 from race_simulator import (simulate_full_race, compute_win_probabilities,
@@ -21,6 +24,283 @@ MODEL_RMSE   = obj.get("rmse", 1.53)
 
 _default_race_key   = "2023_Bahrain"
 _default_total_laps = AVAILABLE_RACES[_default_race_key]["laps"]
+
+# ── ฟีเจอร์ Forecast: calendar 2026 สำหรับ race ทั้งหมดของฤดูกาล ─────
+FORECAST_RACES = {
+    "2026_Bahrain": {
+        "year": 2026, "gp": "Bahrain", "label": "Bahrain GP 2026", "laps": 57,
+        "race_date": "2026-03-08", "round": 1, "circuit": "Sakhir"
+    },
+    "2026_Saudi_Arabia": {
+        "year": 2026, "gp": "Saudi Arabia", "label": "Saudi Arabian GP 2026", "laps": 50,
+        "race_date": "2026-03-22", "round": 2, "circuit": "Jeddah"
+    },
+    "2026_Australia": {
+        "year": 2026, "gp": "Australia", "label": "Australian GP 2026", "laps": 58,
+        "race_date": "2026-04-05", "round": 3, "circuit": "Albert Park"
+    },
+    "2026_China": {
+        "year": 2026, "gp": "China", "label": "Chinese GP 2026", "laps": 56,
+        "race_date": "2026-04-19", "round": 4, "circuit": "Shanghai"
+    },
+    "2026_Japan": {
+        "year": 2026, "gp": "Japan", "label": "Japanese GP 2026", "laps": 53,
+        "race_date": "2026-05-03", "round": 5, "circuit": "Suzuka"
+    },
+    "2026_Miami": {
+        "year": 2026, "gp": "Miami", "label": "Miami GP 2026", "laps": 57,
+        "race_date": "2026-05-17", "round": 6, "circuit": "Miami International Autodrome"
+    },
+    "2026_Emilia_Romagna": {
+        "year": 2026, "gp": "Emilia Romagna", "label": "Emilia Romagna GP 2026", "laps": 63,
+        "race_date": "2026-05-31", "round": 7, "circuit": "Imola"
+    },
+    "2026_Monaco": {
+        "year": 2026, "gp": "Monaco", "label": "Monaco GP 2026", "laps": 78,
+        "race_date": "2026-06-14", "round": 8, "circuit": "Monte Carlo"
+    },
+    "2026_Spain": {
+        "year": 2026, "gp": "Spain", "label": "Spanish GP 2026", "laps": 66,
+        "race_date": "2026-06-28", "round": 9, "circuit": "Barcelona-Catalunya"
+    },
+    "2026_Canada": {
+        "year": 2026, "gp": "Canada", "label": "Canadian GP 2026", "laps": 70,
+        "race_date": "2026-07-12", "round": 10, "circuit": "Montreal"
+    },
+    "2026_Austria": {
+        "year": 2026, "gp": "Austria", "label": "Austrian GP 2026", "laps": 71,
+        "race_date": "2026-07-26", "round": 11, "circuit": "Red Bull Ring"
+    },
+    "2026_Great_Britain": {
+        "year": 2026, "gp": "Great Britain", "label": "British GP 2026", "laps": 52,
+        "race_date": "2026-08-09", "round": 12, "circuit": "Silverstone"
+    },
+    "2026_Belgium": {
+        "year": 2026, "gp": "Belgium", "label": "Belgian GP 2026", "laps": 44,
+        "race_date": "2026-08-23", "round": 13, "circuit": "Spa-Francorchamps"
+    },
+    "2026_Hungary": {
+        "year": 2026, "gp": "Hungary", "label": "Hungarian GP 2026", "laps": 70,
+        "race_date": "2026-08-30", "round": 14, "circuit": "Hungaroring"
+    },
+    "2026_Netherlands": {
+        "year": 2026, "gp": "Netherlands", "label": "Dutch GP 2026", "laps": 72,
+        "race_date": "2026-09-13", "round": 15, "circuit": "Zandvoort"
+    },
+    "2026_Italy": {
+        "year": 2026, "gp": "Italy", "label": "Italian GP 2026", "laps": 53,
+        "race_date": "2026-09-27", "round": 16, "circuit": "Monza"
+    },
+    "2026_Azerbaijan": {
+        "year": 2026, "gp": "Azerbaijan", "label": "Azerbaijan GP 2026", "laps": 51,
+        "race_date": "2026-10-11", "round": 17, "circuit": "Baku"
+    },
+    "2026_Singapore": {
+        "year": 2026, "gp": "Singapore", "label": "Singapore GP 2026", "laps": 62,
+        "race_date": "2026-10-25", "round": 18, "circuit": "Marina Bay"
+    },
+    "2026_United_States": {
+        "year": 2026, "gp": "United States", "label": "United States GP 2026", "laps": 56,
+        "race_date": "2026-11-08", "round": 19, "circuit": "Circuit of the Americas"
+    },
+    "2026_Mexico": {
+        "year": 2026, "gp": "Mexico", "label": "Mexican GP 2026", "laps": 71,
+        "race_date": "2026-11-22", "round": 20, "circuit": "Autódromo Hermanos Rodríguez"
+    },
+    "2026_Brazil": {
+        "year": 2026, "gp": "Brazil", "label": "Brazilian GP 2026", "laps": 71,
+        "race_date": "2026-11-29", "round": 21, "circuit": "Interlagos"
+    },
+    "2026_Las_Vegas": {
+        "year": 2026, "gp": "Las Vegas", "label": "Las Vegas GP 2026", "laps": 50,
+        "race_date": "2026-12-12", "round": 22, "circuit": "Las Vegas Strip"
+    },
+    "2026_Qatar": {
+        "year": 2026, "gp": "Qatar", "label": "Qatar GP 2026", "laps": 57,
+        "race_date": "2026-12-19", "round": 23, "circuit": "Lusail"
+    },
+    "2026_Abu_Dhabi": {
+        "year": 2026, "gp": "Abu Dhabi", "label": "Abu Dhabi GP 2026", "laps": 58,
+        "race_date": "2026-12-31", "round": 24, "circuit": "Yas Marina"
+    },
+}
+
+def _available_future_races():
+    today = date.today()
+    future = {}
+    for key, info in FORECAST_RACES.items():
+        race_date = datetime.strptime(info["race_date"], "%Y-%m-%d").date()
+        if race_date >= today:
+            future[key] = info
+    return dict(sorted(future.items(), key=lambda item: datetime.strptime(item[1]["race_date"], "%Y-%m-%d")))
+
+
+def _default_future_race_key():
+    future_races = _available_future_races()
+    if future_races:
+        return next(iter(future_races))
+    return "2026_Abu_Dhabi"
+
+
+def _time_to_seconds(value):
+    if value is None:
+        return 0.0
+    text = str(value).strip()
+    if not text:
+        return 0.0
+    parts = text.split(":")
+    if len(parts) == 3:
+        h, m, s = parts
+        return float(h) * 3600 + float(m) * 60 + float(s)
+    if len(parts) == 2:
+        m, s = parts
+        return float(m) * 60 + float(s)
+    return float(text)
+
+
+@lru_cache(maxsize=64)
+def _reference_model_total_for_race(gp_name: str, year: int, laps: int):
+    total_laps = int(laps or 50)
+
+    from strategy_optimizer import simulate_strategy
+
+    race_stats = next(
+        (c for c in TRAIN_COMBO_STATS
+         if c["gp"] == gp_name and c["year"] == year and c["driver"] == "VER"),
+        None,
+    )
+    reference_total = race_stats["real_total"] if race_stats else total_laps * 95.0
+
+    ver_sim_raw = simulate_strategy(
+        model,
+        feature_cols,
+        total_laps,
+        "MEDIUM",
+        "SOFT",
+        int(total_laps * 0.44),
+        pace_offset=0.0,
+    )
+    global_offset = (reference_total - ver_sim_raw) / total_laps
+    return float(simulate_strategy(
+        model,
+        feature_cols,
+        total_laps,
+        "MEDIUM",
+        "SOFT",
+        int(total_laps * 0.44),
+        pace_offset=global_offset,
+    ))
+
+
+@lru_cache(maxsize=2)
+def _load_fastf1_2026_results(day_key: str | None = None):
+    today = date.today() if day_key is None else datetime.strptime(day_key, "%Y-%m-%d").date()
+    rows = []
+    for key, info in sorted(FORECAST_RACES.items(), key=lambda item: item[1]["race_date"]):
+        if info["year"] != 2026:
+            continue
+        if datetime.strptime(info["race_date"], "%Y-%m-%d").date() >= today:
+            continue
+        try:
+            session = fastf1.get_session(2026, info["gp"], "R")
+            session.load()
+            if session.results.empty:
+                continue
+            winner = session.results.iloc[0]
+            race_time = winner.get("Time")
+            if race_time is None or pd.isna(race_time):
+                continue
+            total_seconds = race_time.total_seconds() if hasattr(race_time, "total_seconds") else _time_to_seconds(str(race_time))
+            driver_name = (
+                winner.get("FullName")
+                or winner.get("Driver")
+                or winner.get("DriverName")
+                or winner.get("DriverCode")
+            )
+            if driver_name is None:
+                continue
+            row = {
+                "gp": info["gp"],
+                "driver": str(driver_name),
+                "winner": str(driver_name),
+                "laps": int(winner.get("Laps", info["laps"] or 0)),
+                "actual_total": float(total_seconds),
+                "actual_time": fmt_time(total_seconds),
+                "simulated_total": _reference_model_total_for_race(info["gp"], info["year"], info.get("laps") or 0),
+            }
+            if row["simulated_total"] <= 0:
+                continue
+            rows.append(row)
+        except Exception:
+            continue
+    return tuple(rows)
+
+
+def _completed_race_validation():
+    return _completed_race_validation_for_day(date.today().isoformat())
+
+
+@lru_cache(maxsize=2)
+def _completed_race_validation_for_day(day_key: str):
+    live_rows = _load_fastf1_2026_results(day_key)
+    if not live_rows:
+        return []
+
+    values = []
+    for row in live_rows[:6]:
+        actual_total = row["actual_total"]
+        simulated_total = row["simulated_total"]
+        diff_pct = ((simulated_total - actual_total) / actual_total) * 100
+
+        race_info = next(
+            (info for info in FORECAST_RACES.values() if info["gp"] == row["gp"] and info["year"] == 2026),
+            None,
+        )
+        predicted_winner = "—"
+        predicted_time = simulated_total
+        if race_info is not None:
+            from strategy_optimizer import simulate_strategy
+            total_laps = int(race_info.get("laps") or row.get("laps") or 50)
+            race_stats = next(
+                (c for c in TRAIN_COMBO_STATS
+                 if c["gp"] == race_info["gp"] and c["year"] == race_info["year"] and c["driver"] == "VER"),
+                None,
+            )
+            reference_total = race_stats["real_total"] if race_stats else total_laps * 95.0
+            ver_sim_raw = simulate_strategy(
+                model,
+                feature_cols,
+                total_laps,
+                "MEDIUM",
+                "SOFT",
+                int(total_laps * 0.44),
+                pace_offset=0.0,
+            )
+            global_offset = (reference_total - ver_sim_raw) / total_laps
+            all_results = simulate_full_race("model.pkl", total_laps, global_offset=global_offset)
+            if all_results:
+                predicted_winner = all_results[0].code
+                predicted_time = all_results[0].total_time
+                simulated_total = predicted_time
+                diff_pct = ((predicted_time - actual_total) / actual_total) * 100
+
+        values.append({
+            "year": 2026,
+            "gp": row["gp"],
+            "driver": row["driver"],
+            "winner": row.get("winner") or row["driver"],
+            "actual_total": actual_total,
+            "simulated_total": simulated_total,
+            "actual_time": fmt_time(actual_total),
+            "simulated_time": fmt_time(simulated_total),
+            "predicted_winner": predicted_winner,
+            "predicted_time": predicted_time,
+            "predicted_time_str": fmt_time(predicted_time),
+            "diff_pct": round(diff_pct, 2),
+            "reference_year": 2026,
+        })
+    return values
+
 
 def fmt_time(t):
     t = abs(int(t)); m, s = divmod(t, 60); h, m = divmod(m, 60)
@@ -275,6 +555,83 @@ def play_strategy_page():
         available_races=AVAILABLE_RACES,
         selected_race_key=selected_race_key,
         race_label=race_info["label"],
+    )
+
+
+@app.route("/forecast", methods=["GET", "POST"])
+def forecast_page():
+    available_races = _available_future_races()
+    completed_validation = _completed_race_validation()
+    default_key = _default_future_race_key()
+    selected_race_key = request.form.get("race_key") or request.args.get("race_key") or default_key
+    if selected_race_key not in available_races:
+        selected_race_key = default_key
+    race_info = available_races.get(selected_race_key, next(iter(available_races.values()), FORECAST_RACES[default_key]))
+
+    total_laps = race_info["laps"]
+    result = None
+    leaderboard = []
+    error_msg = None
+
+    try:
+        # ใช้ baseline จาก date ปัจจุบัน (เดา future race) ไม่ใช่จากผล race จริงเก่า
+        race_stats = next(
+            (c for c in TRAIN_COMBO_STATS
+             if c["gp"] == race_info["gp"] and c["year"] == race_info["year"] and c["driver"] == "VER"),
+            None
+        )
+        real_total = race_stats["real_total"] if race_stats else race_info["laps"] * 95.0
+
+        from strategy_optimizer import simulate_strategy
+        ver_sim_raw = simulate_strategy(
+            model, feature_cols, total_laps,
+            "MEDIUM", "SOFT", int(total_laps * 0.44),
+            pace_offset=0.0,
+        )
+        global_offset = (real_total - ver_sim_raw) / total_laps
+
+        all_results = simulate_full_race("model.pkl", total_laps, global_offset=global_offset)
+        win_probs = compute_win_probabilities(all_results)
+        p1_time = all_results[0].total_time if all_results else 0.0
+
+        result = {
+            "race_label": race_info["label"],
+            "race_name": race_info["gp"],
+            "year": race_info["year"],
+            "total_laps": total_laps,
+            "p1_time": fmt_time(p1_time),
+            "p1_time_seconds": p1_time,
+            "model_mode": "Projected Race Standings",
+            "race_date": race_info.get("race_date"),
+            "circuit": race_info.get("circuit"),
+            "round": race_info.get("round"),
+            "system_date": date.today().isoformat(),
+        }
+
+        leaderboard = [{
+            "rank": r.rank,
+            "code": r.code,
+            "strategy": f"{r.strategy.first_compound} → {r.strategy.second_compound}",
+            "pit_lap": r.strategy.pit_lap,
+            "total_time": r.total_time,
+            "time_str": fmt_time(r.total_time),
+            "gap_to_p1": round(r.total_time - p1_time, 2),
+            "win_prob_pct": round(win_probs.get(r.code, 0.0) * 100, 1),
+        } for r in all_results]
+    except Exception as e:
+        error_msg = str(e)
+
+    return render_template(
+        "forecast.html",
+        available_races=available_races,
+        completed_validation=completed_validation,
+        selected_race_key=selected_race_key,
+        race_label=race_info["label"],
+        result=result,
+        leaderboard=leaderboard,
+        error=error_msg,
+        mode_label="Future Standings",
+        page_date=date.today().isoformat(),
     )
 
 
