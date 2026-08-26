@@ -1,250 +1,312 @@
 {% extends "base.html" %}
-{% block title %}Strategy Analysis · F1 AI Strategy{% endblock %}
+{% block title %}Strategy Analysis · RaceOpt{% endblock %}
+
+{#- ── Tyre + stint primitives ─────────────────────────────── -#}
+{%- macro cmp(c) -%}
+  {%- set u = (c or '')|upper -%}
+  {%- if u -%}
+  <span class="cmp cmp-{{ u|lower }}" title="{{ u }}"><span aria-hidden="true">{{ u[:1] }}</span><span class="sr-only">{{ u }}</span></span>
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- macro seq(c1, c2, c3) -%}
+<span class="seq">{{ cmp(c1) }}{% if c2 %}<span class="seq-arrow" aria-hidden="true">›</span>{{ cmp(c2) }}{% endif %}{% if c3 %}<span class="seq-arrow" aria-hidden="true">›</span>{{ cmp(c3) }}{% endif %}</span>
+{%- endmacro -%}
+
+{#- Lap-axis stint bar: real pit laps over real race distance -#}
+{%- macro stintbar(total, p1, p2, c1, c2, c3) -%}
+{%- set t = total if total and total > 0 else 1 -%}
+{%- set a = p1 if p1 and p1 < t else t -%}
+{%- set b = p2 if p2 and p2 > a and p2 < t else 0 -%}
+<div class="stint">
+  <div class="stint-track" role="img"
+       aria-label="Stint plan: {{ c1 }} ถึง lap {{ a }}{% if b %}, {{ c2 }} ถึง lap {{ b }}, {{ c3 or 'HARD' }} ถึง lap {{ t }}{% else %}, {{ c2 }} ถึง lap {{ t }}{% endif %}">
+    <span class="stint-seg s-{{ (c1 or 'medium')|lower }}" style="width: {{ "%.3f"|format(a / t * 100) }}%"></span>
+    {%- if b %}
+    <span class="stint-seg s-{{ (c2 or 'soft')|lower }}" style="width: {{ "%.3f"|format((b - a) / t * 100) }}%"></span>
+    <span class="stint-seg s-{{ (c3 or 'hard')|lower }}" style="width: {{ "%.3f"|format((t - b) / t * 100) }}%"></span>
+    {%- else %}
+    <span class="stint-seg s-{{ (c2 or 'soft')|lower }}" style="width: {{ "%.3f"|format((t - a) / t * 100) }}%"></span>
+    {%- endif %}
+  </div>
+  <div class="stint-axis">
+    <span class="l">L1</span>
+    <span class="stint-pit" style="left: {{ "%.3f"|format(a / t * 100) }}%">PIT {{ a }}</span>
+    {%- if b %}
+    <span class="stint-pit" style="left: {{ "%.3f"|format(b / t * 100) }}%">PIT {{ b }}</span>
+    {%- endif %}
+    <span class="r">L{{ t }}</span>
+  </div>
+</div>
+{%- endmacro -%}
 
 {% block content %}
 
-<!-- Header -->
-<header class="flex flex-col gap-1">
-  <p class="text-xs uppercase tracking-[0.2em] text-emerald-400 font-medium">Dynamic Analysis</p>
-  <h1 class="text-3xl font-bold tracking-tight">Strategy Analysis</h1>
-  <p class="text-sm text-slate-400 max-w-lg">
-    เลือก Race และนักแข่ง → AI จะ calibrate โมเดลให้ใกล้เคียงผลจริง
-    แล้ว Grid Search หากลยุทธ์ที่เร็วกว่า พร้อมอธิบายว่าปรับ parameter ไหนบ้าง
+<header class="page-head">
+  <p class="eyebrow">Strategy optimisation</p>
+  <h1 class="page-title">Strategy Analysis</h1>
+  <p class="lede">
+    เลือกสนามและนักแข่ง — ระบบจะ calibrate โมเดลกับ lap time จริง แล้ว grid search
+    หากลยุทธ์ยางและรอบพิทที่ให้เวลารวมเร็วกว่าผลจริง
   </p>
 </header>
 
-<!-- Selector -->
-<section class="bg-slate-900 rounded-2xl p-5 border border-slate-800 shadow">
-  <form method="post" class="flex flex-col sm:flex-row gap-4 items-end">
-    <div class="flex-1">
-      <label class="block text-xs text-slate-400 mb-1 uppercase tracking-wide">เลือก Race</label>
-      <select name="race_key"
-        class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-emerald-500 transition">
-        {% for key, info in available_races.items() %}
-        <option value="{{ key }}" {% if key == selected_race_key %}selected{% endif %}>{{ info.label }}</option>
-        {% endfor %}
-      </select>
+<section aria-labelledby="sel-h">
+  <div class="panel">
+    <div class="panel-head">
+      <h2 class="panel-title" id="sel-h">ตั้งค่าการวิเคราะห์</h2>
+      <span class="panel-note push">Grid search · calibrated pace</span>
     </div>
-    <div class="w-40">
-      <label class="block text-xs text-slate-400 mb-1 uppercase tracking-wide">เลือก Driver</label>
-      <select name="driver"
-        class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-emerald-500 transition">
-        {% for d in available_drivers %}
-        <option value="{{ d }}" {% if d == selected_driver %}selected{% endif %}>{{ d }}</option>
-        {% endfor %}
-      </select>
+    <div class="panel-body">
+      <form method="post" class="form-row">
+        <div class="field">
+          <label for="race_key">สนามแข่ง</label>
+          <select name="race_key" id="race_key">
+            {% for key, info in available_races.items() %}
+            <option value="{{ key }}" {% if key == selected_race_key %}selected{% endif %}>{{ info.label }} · {{ info.laps }} laps</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="driver">นักแข่ง</label>
+          <select name="driver" id="driver">
+            {% for d in available_drivers %}
+            <option value="{{ d }}" {% if d == selected_driver %}selected{% endif %}>{{ d }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <button type="submit" class="btn block">วิเคราะห์</button>
+        </div>
+      </form>
     </div>
-    <button type="submit"
-      class="px-6 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold rounded-xl text-sm transition whitespace-nowrap">
-      วิเคราะห์ →
-    </button>
-  </form>
+  </div>
 </section>
 
-<!-- Error -->
 {% if error %}
-<div class="bg-red-900/40 border border-red-700 rounded-2xl p-4 text-sm text-red-300">
-  <span class="font-semibold">เกิดข้อผิดพลาด:</span> {{ error }}
+<div class="notice notice-bad" role="alert">
+  <p class="notice-title">การวิเคราะห์ไม่สำเร็จ</p>
+  <p>{{ error }}</p>
 </div>
 {% endif %}
 
 {% if result %}
 
-<!-- ═══════════════════════════════════════════════
-     SECTION 1: Calibration — ความใกล้เคียงโมเดล
-════════════════════════════════════════════════ -->
-<section class="space-y-3">
-  <h2 class="text-lg font-bold tracking-tight flex items-center gap-2">
-    <span class="w-6 h-6 rounded-full bg-sky-500/20 text-sky-300 text-xs flex items-center justify-center font-bold">1</span>
-    Model Calibration — ความใกล้เคียงกับผลจริง
-  </h2>
-
-  <div class="grid gap-4 grid-cols-2 md:grid-cols-4">
-    <div class="bg-slate-900/80 rounded-2xl p-4 border border-slate-800">
-      <p class="text-xs text-slate-400">MAE (Race นี้)</p>
-      <p class="text-3xl font-semibold mt-1 text-sky-300">{{ result.mae }}</p>
-      <p class="text-xs text-slate-500 mt-1">วินาที / lap</p>
-    </div>
-    <div class="bg-slate-900/80 rounded-2xl p-4 border border-slate-800">
-      <p class="text-xs text-slate-400">RMSE (Race นี้)</p>
-      <p class="text-3xl font-semibold mt-1 text-sky-300">{{ result.rmse }}</p>
-      <p class="text-xs text-slate-500 mt-1">วินาที / lap</p>
-    </div>
-    <div class="bg-slate-900/80 rounded-2xl p-4 border border-slate-800">
-      <p class="text-xs text-slate-400">% ต่างก่อน Calibrate</p>
-      <p class="text-3xl font-semibold mt-1
-        {% if calibration.diff_before|abs < 1 %}text-emerald-300
-        {% elif calibration.diff_before|abs < 3 %}text-amber-300
-        {% else %}text-red-400{% endif %}">
-        {{ calibration.diff_before }}%
-      </p>
-      <p class="text-xs text-slate-500 mt-1">จำลอง vs จริง</p>
-    </div>
-    <div class="bg-slate-900/80 rounded-2xl p-4 border border-emerald-500/40">
-      <p class="text-xs text-slate-400">% ต่างหลัง Calibrate</p>
-      <p class="text-3xl font-semibold mt-1
-        {% if calibration.diff_after|abs < 1 %}text-emerald-300
-        {% elif calibration.diff_after|abs < 3 %}text-amber-300
-        {% else %}text-red-400{% endif %}">
-        {{ calibration.diff_after }}%
-      </p>
-      <p class="text-xs text-slate-500 mt-1">หลังปรับ pace_offset {{ "%+.2f"|format(calibration.pace_offset) }} s/lap</p>
-    </div>
-  </div>
-
-  <!-- Lap Time Chart -->
-  <div class="bg-slate-900 rounded-2xl p-4 border border-slate-800 shadow">
-    <h3 class="text-sm font-semibold mb-1">Lap Time จริง vs ทำนาย · {{ selected_driver }} @ {{ result.race_label }}</h3>
-    <p class="text-xs text-slate-400 mb-3">ยิ่งเส้นชิดกัน = โมเดลแม่นยำขึ้น</p>
-    <canvas id="lapChart" class="w-full h-60"></canvas>
+<section>
+  <div class="specbar">
+    <div class="spec"><span class="spec-k">Circuit</span><span class="spec-v">{{ result.race_label }}</span></div>
+    <div class="spec"><span class="spec-k">Driver</span><span class="spec-v">{{ result.driver }}</span></div>
+    <div class="spec"><span class="spec-k">Distance</span><span class="spec-v">{{ result.total_laps }} laps</span></div>
+    <div class="spec"><span class="spec-k">Real race time</span><span class="spec-v">{{ result.real_time }}</span></div>
   </div>
 </section>
 
-<!-- ═══════════════════════════════════════════════
-     SECTION 2: กลยุทธ์ที่เร็วกว่าจริง
-════════════════════════════════════════════════ -->
-<section class="space-y-3">
-  <h2 class="text-lg font-bold tracking-tight flex items-center gap-2">
-    <span class="w-6 h-6 rounded-full bg-emerald-500/20 text-emerald-300 text-xs flex items-center justify-center font-bold">2</span>
-    กลยุทธ์ที่ AI พบว่าเร็วกว่าผลจริง
-  </h2>
-
-  {% if top_faster %}
-  <div class="bg-slate-900 rounded-2xl border border-emerald-500/30 shadow overflow-hidden">
-    <div class="px-4 pt-4 pb-2">
-      <p class="text-xs text-slate-400">
-        เวลาจริง: <span class="text-slate-200 font-semibold">{{ result.real_time }}
-        ({{ "%.1f"|format(result.real_total) }} s)</span>
-        &nbsp;·&nbsp; พบ <span class="text-emerald-300 font-semibold">{{ top_faster|length }}</span> กลยุทธ์ที่เร็วกว่า
-      </p>
-    </div>
-    <table class="w-full text-xs border-collapse">
-      <thead class="text-slate-400 border-b border-slate-700 bg-slate-950/50">
-        <tr>
-          <th class="py-2 px-4 text-left">#</th>
-          <th class="py-2 px-2 text-left">Stops</th>
-          <th class="py-2 px-2 text-left">Compound</th>
-          <th class="py-2 px-2 text-center">Pit Lap</th>
-          <th class="py-2 px-2 text-right">เวลารวม (s)</th>
-          <th class="py-2 px-4 text-right">เร็วกว่า</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for r in top_faster %}
-        <tr class="border-b border-slate-800 {% if loop.first %}bg-emerald-500/10{% endif %}">
-          <td class="py-2 px-4 font-bold {% if loop.first %}text-emerald-300{% endif %}">
-            {% if loop.first %}★{% else %}{{ loop.index }}{% endif %}
-          </td>
-          <td class="py-2 px-2">{{ r.num_stops }}-stop</td>
-          <td class="py-2 px-2 font-medium">
-            {{ r.first_compound }}
-            → {{ r.second_compound }}
-            {% if r.third_compound %} → {{ r.third_compound }}{% endif %}
-          </td>
-          <td class="py-2 px-2 text-center">
-            {{ r.pit_lap }}
-            {% if r.second_pit_lap %} / {{ r.second_pit_lap }}{% endif %}
-          </td>
-          <td class="py-2 px-2 text-right">{{ "%.1f"|format(r.sim_total) }}</td>
-          <td class="py-2 px-4 text-right font-semibold text-emerald-400">
-            {{ "%.2f"|format(r.delta_sec|abs) }} s
-            ({{ "%.2f"|format(r.delta_pct|abs) }}%)
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% else %}
-  <div class="bg-slate-900 rounded-2xl p-4 border border-slate-800 text-sm text-slate-400">
-    ไม่พบกลยุทธ์ที่เร็วกว่าผลจริงในการ simulation นี้
-  </div>
-  {% endif %}
-</section>
-
-<!-- ═══════════════════════════════════════════════
-     SECTION 3: Parameter ที่ AI ปรับ
-════════════════════════════════════════════════ -->
-{% if explanations %}
-<section class="space-y-3">
-  <h2 class="text-lg font-bold tracking-tight flex items-center gap-2">
-    <span class="w-6 h-6 rounded-full bg-fuchsia-500/20 text-fuchsia-300 text-xs flex items-center justify-center font-bold">3</span>
-    Parameter ที่ AI ปรับ — เหตุผลที่ทำให้เร็วขึ้น
-  </h2>
-
-  <p class="text-xs text-slate-400">
-    เปรียบเทียบกับ baseline strategy ของนักแข่ง (MEDIUM → SOFT, Pit Lap ~35%)
-  </p>
-
-  <div class="grid gap-3 md:grid-cols-2">
-    {% for e in explanations %}
-    <div class="bg-slate-900 rounded-2xl p-4 border shadow
-      {% if e.impact == 'high' %}border-emerald-500/40{% else %}border-slate-700{% endif %}">
-
-      <!-- Badge impact -->
-      <div class="flex items-start justify-between mb-2">
-        <p class="text-xs font-bold text-slate-200">{{ e.param }}</p>
-        <span class="text-[10px] px-2 py-0.5 rounded-full font-semibold
-          {% if e.impact == 'high' %}bg-emerald-500/20 text-emerald-300
-          {% else %}bg-amber-500/20 text-amber-300{% endif %}">
-          {{ 'HIGH' if e.impact == 'high' else 'MEDIUM' }} impact
-        </span>
-      </div>
-
-      <!-- Before → After -->
-      <div class="flex items-center gap-2 text-sm mb-2">
-        <span class="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono text-xs">{{ e.from }}</span>
-        <span class="text-slate-500">→</span>
-        <span class="px-2 py-0.5 rounded bg-emerald-900/50 text-emerald-300 font-mono text-xs font-bold">{{ e.to }}</span>
-      </div>
-
-      <!-- Reason -->
-      <p class="text-xs text-slate-400 leading-relaxed">{{ e.reason }}</p>
-    </div>
-    {% endfor %}
+<!-- ═══ 01 · Best strategy ══════════════════════════════════ -->
+<section aria-labelledby="best-h">
+  <div class="section-head">
+    <span class="section-no">01</span>
+    <h2 class="section-title" id="best-h">กลยุทธ์ที่ดีที่สุด</h2>
+    <span class="section-note">
+      {% if top_faster %}{{ top_faster|length }} strategies faster than real{% else %}no faster strategy found{% endif %}
+    </span>
   </div>
 
-  <!-- Best strategy summary -->
   {% if top_faster %}
   {% set best = top_faster[0] %}
-  <div class="bg-gradient-to-r from-emerald-900/30 to-slate-900 rounded-2xl p-4 border border-emerald-500/50 shadow">
-    <p class="text-xs uppercase tracking-wide text-emerald-300 font-semibold mb-2">
-      🏆 กลยุทธ์ที่ดีที่สุดที่ AI แนะนำ
-    </p>
-    <div class="flex flex-wrap gap-4 text-sm">
-      <div>
-        <span class="text-slate-400">Strategy: </span>
-        <span class="font-bold text-emerald-300">
-          {{ best.first_compound }} → {{ best.second_compound }}
-          {% if best.third_compound %} → {{ best.third_compound }}{% endif %}
-        </span>
-      </div>
-      <div>
-        <span class="text-slate-400">Pit: </span>
-        <span class="font-semibold">Lap {{ best.pit_lap }}{% if best.second_pit_lap %} / {{ best.second_pit_lap }}{% endif %}</span>
-      </div>
-      <div>
-        <span class="text-slate-400">เวลารวม: </span>
-        <span class="font-semibold">{{ "%.1f"|format(best.sim_total) }} s</span>
-      </div>
-      <div>
-        <span class="text-slate-400">เร็วกว่าจริง: </span>
-        <span class="font-bold text-emerald-400">
-          {{ "%.2f"|format(best.delta_sec|abs) }} s ({{ "%.2f"|format(best.delta_pct|abs) }}%)
-        </span>
+  <div class="panel accent">
+    <div class="panel-body">
+      <div class="split">
+        <div>
+          <p class="eyebrow muted">Compound sequence</p>
+          <div class="row" style="margin-top: 8px">
+            {{ seq(best.first_compound, best.second_compound, best.third_compound) }}
+            <span class="big">
+              {{ best.first_compound }} › {{ best.second_compound }}{% if best.third_compound %} › {{ best.third_compound }}{% endif %}
+            </span>
+          </div>
+
+          <div style="margin-top: 18px">
+            {{ stintbar(result.total_laps, best.pit_lap, best.second_pit_lap,
+                        best.first_compound, best.second_compound, best.third_compound) }}
+          </div>
+
+          <div class="row" style="margin-top: 14px">
+            <span class="kv">Pit lap <b>{{ best.pit_lap }}{% if best.second_pit_lap %} / {{ best.second_pit_lap }}{% endif %}</b></span>
+            <span class="kv">Stops <b>{{ best.num_stops }}</b></span>
+            <span class="kv">Sim total <b>{{ "%.1f"|format(best.sim_total) }} s</b></span>
+          </div>
+        </div>
+
+        <div>
+          <p class="eyebrow muted">เร็วกว่าเวลาจริง</p>
+          <p class="gain-big ok" style="margin-top: 8px">−{{ "%.2f"|format(best.delta_sec|abs) }}<span class="big"> s</span></p>
+          <p class="kv" style="margin-top: 6px">−{{ "%.2f"|format(best.delta_pct|abs) }}% ของเวลารวม</p>
+          <div class="divider"></div>
+          <p class="kv">เวลาจริง <b>{{ "%.1f"|format(result.real_total) }} s</b></p>
+          <p class="kv">เวลาจำลอง <b>{{ "%.1f"|format(best.sim_total) }} s</b></p>
+        </div>
       </div>
     </div>
   </div>
+  {% else %}
+  <div class="notice">
+    <p class="notice-title">ไม่พบกลยุทธ์ที่เร็วกว่า</p>
+    <p>grid search ไม่พบชุดยาง/รอบพิทที่ให้เวลารวมต่ำกว่าเวลาจริงของ {{ result.driver }} ในสนามนี้</p>
+  </div>
   {% endif %}
+</section>
+
+<!-- ═══ 02 · Faster strategies ══════════════════════════════ -->
+{% if top_faster %}
+<section aria-labelledby="alt-h">
+  <div class="section-head">
+    <span class="section-no">02</span>
+    <h2 class="section-title" id="alt-h">กลยุทธ์อื่นที่เร็วกว่า</h2>
+    <span class="section-note">ref {{ "%.1f"|format(result.real_total) }} s</span>
+  </div>
+
+  <div class="panel">
+    <div class="tbl-wrap" tabindex="0" role="region" aria-label="ตารางกลยุทธ์ที่เร็วกว่าเวลาจริง">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th scope="col" style="width: 44px">#</th>
+            <th scope="col">Compound</th>
+            <th scope="col" class="t-ctr">Pit lap</th>
+            <th scope="col" class="t-ctr col-opt">Stops</th>
+            <th scope="col" class="t-num">Sim total</th>
+            <th scope="col" class="t-num">Delta</th>
+            <th scope="col" class="t-num col-opt">Delta %</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in top_faster %}
+          <tr {% if loop.first %}class="marked"{% endif %}>
+            <td class="rk {% if loop.first %}lead{% endif %}">{{ loop.index }}</td>
+            <td>
+              {{ seq(r.first_compound, r.second_compound, r.third_compound) }}
+              <span class="seq-text">
+                {{ r.first_compound }} › {{ r.second_compound }}{% if r.third_compound %} › {{ r.third_compound }}{% endif %}
+              </span>
+            </td>
+            <td class="t-ctr">{{ r.pit_lap }}{% if r.second_pit_lap %} / {{ r.second_pit_lap }}{% endif %}</td>
+            <td class="t-ctr col-opt dim">{{ r.num_stops }}</td>
+            <td class="t-num">{{ "%.1f"|format(r.sim_total) }}</td>
+            <td class="t-num ok">−{{ "%.2f"|format(r.delta_sec|abs) }} s</td>
+            <td class="t-num ok col-opt">−{{ "%.2f"|format(r.delta_pct|abs) }}%</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="panel-foot">Delta = เวลาจำลอง − เวลาจริง · ค่าติดลบคือเร็วกว่า</div>
+  </div>
 </section>
 {% endif %}
 
-<!-- Chart.js -->
+<!-- ═══ 03 · Parameter changes ══════════════════════════════ -->
+{% if explanations %}
+<section aria-labelledby="param-h">
+  <div class="section-head">
+    <span class="section-no">03</span>
+    <h2 class="section-title" id="param-h">Parameter ที่เปลี่ยนจาก baseline</h2>
+    <span class="section-note">baseline MEDIUM › SOFT · pit ~35%</span>
+  </div>
+
+  <div class="defs">
+    {% for e in explanations %}
+    <div class="def">
+      <div class="def-head">
+        <span class="def-name">{{ e.param }}</span>
+        <span class="def-impact {% if e.impact == 'high' %}high{% endif %}">{{ e.impact }} impact</span>
+      </div>
+      <p class="def-move"><span class="from">{{ e.from }}</span> <span class="seq-arrow">→</span> <span class="to">{{ e.to }}</span></p>
+      <p class="def-reason">{{ e.reason }}</p>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<!-- ═══ 04 · Model calibration ══════════════════════════════ -->
+<section aria-labelledby="cal-h">
+  <div class="section-head">
+    <span class="section-no">04</span>
+    <h2 class="section-title" id="cal-h">Model calibration</h2>
+    <span class="section-note">pace offset {{ "%+.2f"|format(calibration.pace_offset) }} s/lap</span>
+  </div>
+  <p class="section-sub">
+    ตรวจว่าโมเดลทำนายเวลาต่อ lap ใกล้ผลจริงแค่ไหน ก่อนนำไปใช้ค้นหากลยุทธ์ — ยิ่ง % ต่างน้อย ยิ่งเชื่อผลด้านบนได้มากขึ้น
+  </p>
+
+  <div class="metrics">
+    <div class="metric">
+      <span class="metric-k">MAE</span>
+      <span class="metric-v">{{ result.mae }}</span>
+      <span class="metric-u">s / lap</span>
+    </div>
+    <div class="metric">
+      <span class="metric-k">RMSE</span>
+      <span class="metric-v">{{ result.rmse }}</span>
+      <span class="metric-u">s / lap</span>
+    </div>
+    <div class="metric">
+      <span class="metric-k">Diff · ก่อน calibrate</span>
+      <span class="metric-v {% if calibration.diff_before|abs < 1 %}ok{% elif calibration.diff_before|abs < 3 %}warn{% else %}bad{% endif %}">
+        {{ "%+.2f"|format(calibration.diff_before) }}%
+      </span>
+      <span class="metric-u">sim vs real</span>
+    </div>
+    <div class="metric">
+      <span class="metric-k">Diff · หลัง calibrate</span>
+      <span class="metric-v {% if calibration.diff_after|abs < 1 %}ok{% elif calibration.diff_after|abs < 3 %}warn{% else %}bad{% endif %}">
+        {{ "%+.2f"|format(calibration.diff_after) }}%
+      </span>
+      <span class="metric-u">tolerance ±1%</span>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top: 14px">
+    <div class="panel-head">
+      <h3 class="panel-title">Lap time · จริง vs ทำนาย</h3>
+      <span class="panel-note push">{{ result.driver }} · {{ result.race_label }}</span>
+    </div>
+    <div class="panel-body">
+      <div class="chart h-md"><canvas id="lapChart"></canvas></div>
+      <div class="legend" style="margin-top: 12px">
+        <span><i style="background: #C7CBD1"></i>เวลาจริง (FastF1)</span>
+        <span><i style="background: #E10600"></i>เวลาที่โมเดลทำนาย</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+{% else %}
+
+<div class="empty">
+  <p class="empty-title">ยังไม่มีผลการวิเคราะห์</p>
+  <p class="empty-note">เลือกสนามและนักแข่งด้านบน แล้วกด “วิเคราะห์”</p>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if result %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
   const lapLabels  = JSON.parse('{{ lap_labels  | tojson | safe }}');
   const actualLaps = JSON.parse('{{ actual_laps | tojson | safe }}');
   const predLaps   = JSON.parse('{{ pred_laps   | tojson | safe }}');
+
+  const INK   = "#E9EAED";
+  const MUTED = "#71757F";
+  const GRID  = "rgba(255,255,255,0.05)";
+  const MONO  = "'IBM Plex Mono', ui-monospace, monospace";
+
+  Chart.defaults.font.family = MONO;
+  Chart.defaults.font.size   = 10;
+  Chart.defaults.color       = MUTED;
 
   new Chart(document.getElementById("lapChart").getContext("2d"), {
     type: "line",
@@ -254,43 +316,58 @@
         {
           label: "จริง",
           data: actualLaps,
-          borderColor: "rgba(59,130,246,1)",
-          backgroundColor: "rgba(59,130,246,0.1)",
-          tension: 0.3, pointRadius: 2,
+          borderColor: "#C7CBD1",
+          backgroundColor: "#C7CBD1",
+          borderWidth: 1.5, tension: 0, pointRadius: 0, pointHitRadius: 8,
         },
         {
           label: "ทำนาย (หลัง calibrate)",
           data: predLaps,
-          borderColor: "rgba(251,146,60,1)",
-          backgroundColor: "rgba(251,146,60,0.1)",
-          tension: 0.3, pointRadius: 2,
+          borderColor: "#E10600",
+          backgroundColor: "#E10600",
+          borderWidth: 1.5, tension: 0, pointRadius: 0, pointHitRadius: 8,
         },
       ],
     },
     options: {
       responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
       plugins: {
-        legend: { labels: { color: "#e5e7eb" } },
-        tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(3)} s` } },
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: "#0D0E10",
+          borderColor: "#3A3D45",
+          borderWidth: 1,
+          titleColor: INK,
+          bodyColor: INK,
+          cornerRadius: 3,
+          padding: 10,
+          displayColors: false,
+          titleFont: { family: MONO, size: 10 },
+          bodyFont: { family: MONO, size: 11 },
+          callbacks: {
+            title: items => "LAP " + items[0].label,
+            label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(3)} s`,
+          },
+        },
       },
       scales: {
-        x: { title: { display: true, text: "Lap", color: "#e5e7eb" }, ticks: { color: "#9ca3af" }, grid: { color: "rgba(55,65,81,0.35)" } },
-        y: { title: { display: true, text: "Lap Time (s)", color: "#e5e7eb" }, ticks: { color: "#9ca3af" }, grid: { color: "rgba(55,65,81,0.35)" } },
+        x: {
+          title: { display: true, text: "LAP", color: MUTED, font: { size: 10 } },
+          ticks: { color: MUTED, maxRotation: 0, autoSkipPadding: 16 },
+          grid: { color: GRID, drawTicks: false },
+          border: { color: "#3A3D45" },
+        },
+        y: {
+          title: { display: true, text: "LAP TIME (S)", color: MUTED, font: { size: 10 } },
+          ticks: { color: MUTED },
+          grid: { color: GRID, drawTicks: false },
+          border: { color: "#3A3D45" },
+        },
       },
     },
   });
 </script>
-
-{% else %}
-<!-- Placeholder -->
-<div class="flex flex-col items-center justify-center py-24 text-slate-600 gap-3">
-  <svg class="w-14 h-14 opacity-25" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
-      d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
-  </svg>
-  <p class="text-sm">เลือก Race และ Driver แล้วกด "วิเคราะห์ →"</p>
-  <p class="text-xs text-slate-700">AI จะ calibrate โมเดล → Grid Search → แสดงกลยุทธ์ที่เร็วกว่าจริง</p>
-</div>
 {% endif %}
-
 {% endblock %}

@@ -2,51 +2,647 @@
 <html lang="th">
   <head>
     <meta charset="UTF-8" />
-    <title>{% block title %}F1 AI Strategy{% endblock %}</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>{% block title %}RaceOpt · F1 Strategy{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap"
+      rel="stylesheet" />
     <style>
+      /* ─────────────────────────────────────────────
+         RaceOpt — motorsport engineering design tokens
+      ───────────────────────────────────────────── */
+      :root {
+        --bg:        #121316;
+        --bg-sunk:   #0D0E10;
+        --surface:   #191A1E;
+        --surface-2: #1F2126;
+        --line:      #2A2C32;
+        --line-2:    #3A3D45;
+        --fg:        #E9EAED;
+        --fg-2:      #A2A6B0;
+        --fg-3:      #71757F;
+
+        --red:       #E10600;
+        --red-hi:    #FF2A17;
+        --red-wash:  rgba(225, 6, 0, 0.10);
+
+        --gain:      #46B37A;
+        --warn:      #D9A227;
+        --bad:       #D8453C;
+
+        --soft:      #E8433A;
+        --medium:    #D9B23A;
+        --hard:      #DDE0E5;
+
+        --sans: "IBM Plex Sans Thai", system-ui, -apple-system, "Segoe UI", sans-serif;
+        --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+        --r:  3px;
+        --r2: 5px;
+        --gut: clamp(16px, 3vw, 28px);
+      }
+
+      *, *::before, *::after { box-sizing: border-box; }
+
+      html { -webkit-text-size-adjust: 100%; }
+
       body {
-        font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
-          "Segoe UI", sans-serif;
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: var(--sans);
+        font-size: 14px;
+        line-height: 1.55;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      h1, h2, h3, h4 { margin: 0; font-weight: 600; line-height: 1.25; letter-spacing: -0.01em; }
+      p { margin: 0; }
+      a { color: inherit; }
+
+      /* Numerals are instrument readings: always monospaced + tabular */
+      .num, .mono, table td, table th, input, select, .btn {
+        font-family: var(--mono);
+        font-variant-numeric: tabular-nums;
+        font-feature-settings: "tnum" 1;
+      }
+
+      /* ── Focus / motion baseline ───────────────── */
+      :focus { outline: none; }
+      :focus-visible {
+        outline: 2px solid var(--red-hi);
+        outline-offset: 2px;
+        border-radius: 2px;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { transition: none !important; animation: none !important; }
+      }
+
+      .skip {
+        position: absolute;
+        left: -9999px;
+        top: 0;
+        z-index: 100;
+        padding: 10px 16px;
+        background: var(--red);
+        color: #fff;
+        font: 600 12px/1 var(--mono);
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        text-decoration: none;
+      }
+      .skip:focus { left: 8px; top: 8px; }
+
+      /* ── Chrome: top line + nav ────────────────── */
+      .topline { height: 2px; background: var(--red); }
+
+      .nav {
+        position: sticky;
+        top: 0;
+        z-index: 30;
+        background: rgba(18, 19, 22, 0.94);
+        backdrop-filter: blur(8px);
+        border-bottom: 1px solid var(--line);
+      }
+      .nav-inner {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 0 var(--gut);
+        display: flex;
+        flex-direction: column;
+      }
+      .brand {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        padding: 12px 0 10px;
+        text-decoration: none;
+      }
+      .brand-mark {
+        font: 600 15px/1 var(--mono);
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      .brand-mark::before {
+        content: "";
+        display: inline-block;
+        width: 4px;
+        height: 13px;
+        margin-right: 8px;
+        background: var(--red);
+        vertical-align: -1px;
+      }
+      .brand-sub {
+        font: 400 11px/1 var(--mono);
+        letter-spacing: 0.08em;
+        color: var(--fg-3);
+        text-transform: uppercase;
+      }
+      .tabs {
+        display: flex;
+        gap: 2px;
+        overflow-x: auto;
+        scrollbar-width: none;
+        margin: 0 calc(-1 * var(--gut));
+        padding: 0 var(--gut);
+      }
+      .tabs::-webkit-scrollbar { display: none; }
+      .tab {
+        flex: 0 0 auto;
+        padding: 9px 14px;
+        border-bottom: 2px solid transparent;
+        color: var(--fg-3);
+        font: 500 11.5px/1 var(--mono);
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        text-decoration: none;
+        white-space: nowrap;
+        transition: color 0.12s ease, border-color 0.12s ease;
+      }
+      .tab:hover { color: var(--fg); }
+      .tab[aria-current="page"] { color: var(--fg); border-bottom-color: var(--red); }
+
+      @media (min-width: 720px) {
+        .nav-inner { flex-direction: row; align-items: center; justify-content: space-between; gap: 24px; }
+        .brand { padding: 0; }
+        .tabs { margin: 0; padding: 0; }
+        .tab { padding: 16px 14px; }
+      }
+
+      /* ── Page shell ────────────────────────────── */
+      .main {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 28px var(--gut) 72px;
+      }
+      .stack > * + * { margin-top: 28px; }
+
+      .page-head { max-width: 62ch; }
+      .eyebrow {
+        font: 500 11px/1.4 var(--mono);
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--red);
+      }
+      .eyebrow.muted { color: var(--fg-3); }
+      .page-title { font-size: clamp(22px, 3.4vw, 30px); margin-top: 8px; }
+      .lede { margin-top: 8px; color: var(--fg-2); max-width: 68ch; }
+
+      /* ── Spec bar: circuit / driver / laps readout ── */
+      .specbar {
+        display: flex;
+        flex-wrap: wrap;
+        border: 1px solid var(--line);
+        border-radius: var(--r);
+        background: var(--surface);
+      }
+      .spec {
+        flex: 1 1 auto;
+        min-width: 136px;
+        padding: 10px 14px;
+        border-right: 1px solid var(--line);
+      }
+      .spec:last-child { border-right: 0; }
+      .spec-k {
+        display: block;
+        font: 500 10px/1.4 var(--mono);
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--fg-3);
+      }
+      .spec-v { font: 500 14px/1.5 var(--mono); color: var(--fg); }
+
+      /* ── Section heading with rule ─────────────── */
+      .section-head {
+        display: flex;
+        align-items: baseline;
+        gap: 12px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--line-2);
+        margin-bottom: 14px;
+      }
+      .section-no {
+        font: 500 11px/1.6 var(--mono);
+        letter-spacing: 0.12em;
+        color: var(--red);
+      }
+      .section-title { font-size: 15px; }
+      .section-note { margin-left: auto; font: 400 11.5px/1.6 var(--mono); color: var(--fg-3); }
+      .section-sub { margin: -4px 0 14px; font-size: 12.5px; color: var(--fg-2); }
+
+      /* ── Panel ─────────────────────────────────── */
+      .panel {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--r);
+      }
+      .panel.accent { border-left: 2px solid var(--red); }
+      .panel-head {
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 4px 12px;
+      }
+      .panel-title { font-size: 13px; }
+      .panel-note { font: 400 11.5px/1.6 var(--mono); color: var(--fg-3); }
+      .panel-note.push { margin-left: auto; }
+      .panel-body { padding: 16px; }
+      .panel-foot {
+        padding: 10px 16px;
+        border-top: 1px solid var(--line);
+        font: 400 11.5px/1.6 var(--mono);
+        color: var(--fg-3);
+      }
+
+      /* ── Metric strip (one panel, hairline-divided) ── */
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--r);
+        overflow: hidden;
+      }
+      .metric {
+        padding: 14px 16px;
+        border-right: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+        min-width: 0;
+      }
+      .metric-k {
+        font: 500 10px/1.4 var(--mono);
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--fg-3);
+      }
+      .metric-v {
+        display: block;
+        margin-top: 6px;
+        font: 500 clamp(20px, 3vw, 26px)/1.15 var(--mono);
+        font-variant-numeric: tabular-nums;
+        letter-spacing: -0.01em;
+        overflow-wrap: anywhere;
+      }
+      .metric-u { display: block; margin-top: 4px; font: 400 11px/1.4 var(--mono); color: var(--fg-3); }
+      @media (min-width: 640px) {
+        .metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+        .metrics.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .metrics.cols-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+        .metric { border-bottom: 0; }
+      }
+      .metrics .metric:last-child { border-right: 0; }
+
+      /* ── Value semantics ──────────────────────── */
+      .ok   { color: var(--gain); }
+      .warn { color: var(--warn); }
+      .bad  { color: var(--bad); }
+      .dim  { color: var(--fg-3); }
+      .fg2  { color: var(--fg-2); }
+      .lead { color: var(--red); }
+
+      /* ── Tables: timing-screen treatment ──────── */
+      .tbl-wrap { overflow-x: auto; }
+      table.tbl {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12.5px;
+      }
+      table.tbl th {
+        background: var(--bg-sunk);
+        padding: 9px 12px;
+        border-bottom: 1px solid var(--line-2);
+        font-weight: 500;
+        font-size: 10px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--fg-3);
+        text-align: left;
+        white-space: nowrap;
+      }
+      table.tbl td {
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--line);
+        vertical-align: middle;
+        white-space: nowrap;
+      }
+      table.tbl tbody tr:last-child td { border-bottom: 0; }
+      table.tbl tbody tr:hover td { background: rgba(255, 255, 255, 0.022); }
+      table.tbl tfoot td {
+        border-top: 1px solid var(--line-2);
+        border-bottom: 0;
+        background: var(--bg-sunk);
+        font-weight: 500;
+      }
+      .t-num { text-align: right; font-variant-numeric: tabular-nums; }
+      .t-ctr { text-align: center; }
+      td.wrap, th.wrap { white-space: normal; }
+      .sub { display: block; font-size: 10.5px; color: var(--fg-3); }
+      table.tbl tbody tr.marked td { background: var(--red-wash); }
+      table.tbl tbody tr.marked td:first-child { box-shadow: inset 2px 0 0 var(--red); }
+      .rk { font-weight: 600; }
+
+      /* Low-priority columns fold away on small screens */
+      @media (max-width: 600px) {
+        .col-opt { display: none; }
+      }
+
+      /* ── Compound tokens (F1 tyre semantics) ──── */
+      .cmp {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 19px;
+        height: 19px;
+        border: 1px solid currentColor;
+        border-radius: 2px;
+        font: 600 10.5px/1 var(--mono);
+        vertical-align: -4px;
+      }
+      .cmp-soft   { color: var(--soft); }
+      .cmp-medium { color: var(--medium); }
+      .cmp-hard   { color: var(--hard); }
+      .seq { display: inline-flex; align-items: center; gap: 5px; }
+      .seq-arrow { color: var(--fg-3); font: 400 11px/1 var(--mono); }
+      .seq-text { font: 500 12px/1 var(--mono); letter-spacing: 0.04em; color: var(--fg-2); }
+
+      /* ── Stint bar: the strategy read at a glance ── */
+      .stint-track {
+        display: flex;
+        height: 10px;
+        background: var(--bg-sunk);
+        border: 1px solid var(--line);
+        border-radius: 2px;
+        overflow: hidden;
+      }
+      .stint-seg { height: 100%; min-width: 2px; opacity: 0.88; }
+      .stint-seg + .stint-seg { border-left: 1px solid var(--bg); }
+      .stint-seg.s-soft   { background: var(--soft); }
+      .stint-seg.s-medium { background: var(--medium); }
+      .stint-seg.s-hard   { background: var(--hard); }
+      .stint-axis {
+        position: relative;
+        height: 16px;
+        margin-top: 5px;
+        font: 400 10px/16px var(--mono);
+        color: var(--fg-3);
+      }
+      .stint-axis .l { position: absolute; left: 0; }
+      .stint-axis .r { position: absolute; right: 0; }
+      .stint-pit {
+        position: absolute;
+        transform: translateX(-50%);
+        color: var(--fg-2);
+        white-space: nowrap;
+      }
+      .stint-pit::before {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: -5px;
+        width: 1px;
+        height: 5px;
+        background: var(--red);
+      }
+
+      /* ── Meter (probability / gap) ─────────────── */
+      .meter {
+        height: 4px;
+        background: var(--bg-sunk);
+        border: 1px solid var(--line);
+        border-radius: 2px;
+        overflow: hidden;
+      }
+      .meter-fill { height: 100%; background: var(--red); }
+      .meter-fill.neutral { background: var(--line-2); }
+
+      /* ── Impact scale (5-step) ─────────────────── */
+      .impact { display: inline-flex; gap: 2px; }
+      .impact i { width: 5px; height: 10px; background: var(--line-2); border-radius: 1px; }
+      .impact i.on { background: var(--fg-2); }
+
+      /* ── Forms ─────────────────────────────────── */
+      .form-row {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: 1fr;
+        align-items: end;
+      }
+      @media (min-width: 720px) {
+        .form-row { grid-template-columns: minmax(0, 1fr) 150px auto; }
+      }
+      .field { min-width: 0; }
+      .field > label, .label {
+        display: block;
+        margin-bottom: 6px;
+        font: 500 10px/1.4 var(--mono);
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--fg-3);
+      }
+      .hint { margin-top: 6px; font: 400 11px/1.5 var(--mono); color: var(--fg-3); }
+
+      select, input[type="number"] {
+        width: 100%;
+        padding: 9px 11px;
+        background: var(--bg-sunk);
+        color: var(--fg);
+        border: 1px solid var(--line-2);
+        border-radius: var(--r);
+        font-size: 13px;
+        transition: border-color 0.12s ease;
+        appearance: none;
+      }
+      select {
+        background-image: linear-gradient(45deg, transparent 50%, var(--fg-3) 50%),
+                          linear-gradient(135deg, var(--fg-3) 50%, transparent 50%);
+        background-position: calc(100% - 16px) calc(50% - 1px), calc(100% - 11px) calc(50% - 1px);
+        background-size: 5px 5px, 5px 5px;
+        background-repeat: no-repeat;
+        padding-right: 32px;
+      }
+      select:hover, input[type="number"]:hover { border-color: var(--fg-3); }
+      select:focus-visible, input[type="number"]:focus-visible { border-color: var(--red-hi); }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 10px 20px;
+        border: 1px solid var(--red);
+        border-radius: var(--r);
+        background: var(--red);
+        color: #fff;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        cursor: pointer;
+        transition: background 0.12s ease, border-color 0.12s ease;
+      }
+      .btn:hover { background: var(--red-hi); border-color: var(--red-hi); }
+      .btn.block { width: 100%; }
+
+      /* ── Notices ───────────────────────────────── */
+      .notice {
+        border: 1px solid var(--line);
+        border-left: 2px solid var(--line-2);
+        border-radius: var(--r);
+        background: var(--surface);
+        padding: 12px 16px;
+      }
+      .notice-warn { border-left-color: var(--warn); }
+      .notice-bad  { border-left-color: var(--bad); }
+      .notice-title {
+        font: 500 11px/1.5 var(--mono);
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--fg-2);
+      }
+      .notice p { margin-top: 6px; font-size: 12.5px; color: var(--fg-2); }
+
+      /* ── Empty state ───────────────────────────── */
+      .empty {
+        border: 1px dashed var(--line-2);
+        border-radius: var(--r);
+        padding: 56px 24px;
+        text-align: center;
+      }
+      .empty-title { font: 500 12.5px/1.6 var(--mono); letter-spacing: 0.06em; color: var(--fg-2); }
+      .empty-note { margin-top: 6px; font: 400 11.5px/1.6 var(--mono); color: var(--fg-3); }
+
+      /* ── Definition list (parameter deltas) ───── */
+      .defs {
+        display: grid;
+        grid-template-columns: 1fr;
+        border: 1px solid var(--line);
+        border-radius: var(--r);
+        background: var(--surface);
+        overflow: hidden;
+      }
+      @media (min-width: 800px) { .defs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+      .def { padding: 14px 16px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); }
+      .def-head { display: flex; align-items: baseline; gap: 10px; }
+      .def-name { font-size: 12.5px; font-weight: 600; }
+      .def-impact {
+        margin-left: auto;
+        font: 500 10px/1.4 var(--mono);
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--fg-3);
+        white-space: nowrap;
+      }
+      .def-impact.high { color: var(--red); }
+      .def-move { margin-top: 8px; font: 500 12px/1.5 var(--mono); }
+      .def-move .from { color: var(--fg-3); }
+      .def-move .to { color: var(--fg); }
+      .def-reason { margin-top: 6px; font-size: 12px; color: var(--fg-2); }
+
+      /* ── Chart frame ───────────────────────────── */
+      .chart { position: relative; width: 100%; }
+      .chart.h-lg { height: 300px; }
+      .chart.h-md { height: 240px; }
+      .chart.h-sm { height: 170px; }
+
+      /* ── Legend ────────────────────────────────── */
+      .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+      .legend span {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font: 400 11px/1.6 var(--mono);
+        color: var(--fg-3);
+      }
+      .legend i { width: 12px; height: 2px; border-radius: 1px; background: var(--fg-3); flex: 0 0 auto; }
+
+      /* ── Lab layout (form left / results right) ── */
+      .lab { display: grid; gap: 20px; grid-template-columns: 1fr; align-items: start; }
+      @media (min-width: 900px) {
+        .lab { grid-template-columns: 320px minmax(0, 1fr); gap: 24px; }
+        .lab-form { position: sticky; top: 76px; }
+      }
+      .lab-out > * + * { margin-top: 16px; }
+
+      .row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 20px; }
+      .kv { font: 400 12px/1.7 var(--mono); color: var(--fg-3); }
+      .kv b { font-weight: 500; color: var(--fg); }
+
+      /* ── Readout typography ───────────────────── */
+      .big { font: 500 clamp(17px, 2.6vw, 21px)/1.25 var(--mono); letter-spacing: 0.02em; }
+      .gain-big { font: 500 clamp(28px, 5vw, 40px)/1.05 var(--mono); letter-spacing: -0.02em; }
+      .rank-big { font: 600 clamp(38px, 7vw, 56px)/1 var(--mono); letter-spacing: -0.03em; }
+      .divider { border-top: 1px solid var(--line); margin: 14px 0; }
+
+      .split { display: grid; gap: 20px; grid-template-columns: 1fr; }
+      @media (min-width: 760px) {
+        .split { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 32px; }
+        .split > * + * { border-left: 1px solid var(--line); padding-left: 32px; }
+      }
+
+      /* ── Footer ────────────────────────────────── */
+      .foot { border-top: 1px solid var(--line); }
+      .foot-inner {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 16px var(--gut);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 20px;
+        font: 400 11px/1.6 var(--mono);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--fg-3);
+      }
+
+      .sr-only {
+        position: absolute;
+        width: 1px; height: 1px;
+        padding: 0; margin: -1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+        border: 0;
       }
     </style>
   </head>
-  <body class="bg-slate-950 text-slate-50 min-h-screen">
+  <body>
+    <a class="skip" href="#main">ข้ามไปเนื้อหาหลัก</a>
+    <div class="topline"></div>
 
-    <div class="h-1 w-full bg-gradient-to-r from-emerald-400 via-sky-400 to-fuchsia-500"></div>
-
-    <nav class="border-b border-slate-800 bg-slate-950/90 backdrop-blur sticky top-0 z-30">
-      <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
-        <div class="flex items-center gap-2">
-          <div class="h-2 w-2 rounded-full bg-emerald-400 animate-pulse mr-1"></div>
-          <span class="font-semibold tracking-tight">F1 AI Strategy</span>
-          <span class="ml-2 text-xs text-slate-500 hidden sm:inline">
-            Random Forest · FastF1
-          </span>
-        </div>
-        <div class="flex items-center gap-1 text-sm">
-          <a href="{{ url_for('index') }}"
-             class="px-3 py-1.5 rounded-lg transition
-             {% if request.endpoint == 'index' %}bg-slate-800 text-emerald-300 font-semibold{% else %}hover:bg-slate-800 hover:text-slate-200 text-slate-400{% endif %}">
-            🧪 Model Performance
-          </a>
-          <a href="{{ url_for('analysis_page') }}"
-             class="px-3 py-1.5 rounded-lg transition
-             {% if request.endpoint == 'analysis_page' %}bg-slate-800 text-emerald-300 font-semibold{% else %}hover:bg-slate-800 hover:text-slate-200 text-slate-400{% endif %}">
-            🔍 Strategy Analysis
-          </a>
-          <a href="{{ url_for('play_strategy_page') }}"
-             class="px-3 py-1.5 rounded-lg transition
-             {% if request.endpoint == 'play_strategy_page' %}bg-slate-800 text-emerald-300 font-semibold{% else %}hover:bg-slate-800 hover:text-slate-200 text-slate-400{% endif %}">
-            ⚙️ Custom Strategy
-          </a>
+    <nav class="nav" aria-label="เมนูหลัก">
+      <div class="nav-inner">
+        <a class="brand" href="{{ url_for('index') }}">
+          <span class="brand-mark">RaceOpt</span>
+          <span class="brand-sub">Random Forest · FastF1</span>
+        </a>
+        <div class="tabs">
+          <a class="tab" href="{{ url_for('index') }}"
+             {% if request.endpoint == 'index' %}aria-current="page"{% endif %}>Model Report</a>
+          <a class="tab" href="{{ url_for('analysis_page') }}"
+             {% if request.endpoint == 'analysis_page' %}aria-current="page"{% endif %}>Strategy Analysis</a>
+          <a class="tab" href="{{ url_for('play_strategy_page') }}"
+             {% if request.endpoint == 'play_strategy_page' %}aria-current="page"{% endif %}>Strategy Lab</a>
         </div>
       </div>
     </nav>
 
-    <main class="max-w-6xl mx-auto px-4 py-6 space-y-6">
+    <main class="main stack" id="main">
       {% block content %}{% endblock %}
     </main>
+
+    <footer class="foot">
+      <div class="foot-inner">
+        <span>RaceOpt · F1 Strategy Analysis</span>
+        <span>Model: Random Forest Regressor</span>
+        <span>Data: FastF1 lap telemetry</span>
+      </div>
+    </footer>
 
     {% block scripts %}{% endblock %}
   </body>

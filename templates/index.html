@@ -1,279 +1,295 @@
 {% extends "base.html" %}
-{% block title %}Model Performance · F1 AI Strategy{% endblock %}
+{% block title %}Model Report · RaceOpt{% endblock %}
 
 {% block content %}
 
-<header class="flex flex-col gap-2">
-  <p class="text-xs uppercase tracking-[0.2em] text-emerald-400 font-medium">Model Training Evidence</p>
-  <h1 class="text-3xl font-bold tracking-tight">Model Performance</h1>
-  <p class="text-sm text-slate-300 max-w-2xl">
-    หลักฐานการ train โมเดล Random Forest จากข้อมูลจริง FastF1 · แสดง parameter ที่ใช้, สนาม, และนักแข่งที่เลือก
+<header class="page-head">
+  <p class="eyebrow">Model validation report</p>
+  <h1 class="page-title">Model Performance</h1>
+  <p class="lede">
+    รายงานตรวจสอบโมเดล Random Forest ที่ train จาก lap telemetry จริงของ FastF1 —
+    แสดง configuration, feature ที่ใช้ และความคลาดเคลื่อนของเวลาที่จำลองได้เทียบกับเวลาจริง
   </p>
-  <!-- คำเตือนชัดเจน -->
-  <div class="flex items-start gap-3 bg-amber-500/10 border border-amber-500/40 rounded-xl px-4 py-3 mt-1 max-w-2xl">
-    <span class="text-amber-400 text-base mt-0.5">⚠️</span>
-    <div>
-      <p class="text-xs font-bold text-amber-300 mb-0.5">สิ่งที่แสดงในหน้านี้คือ "การตรวจสอบความถูกต้องของโมเดล" ไม่ใช่การ optimize</p>
-      <p class="text-xs text-amber-200/70 leading-relaxed">
-        โมเดลใช้ <span class="font-semibold text-amber-200">parameter ชุดเดียวกัน</span>กับที่นักแข่งใช้จริงในการแข่ง
-        แล้วเปรียบว่าเวลาที่ AI จำลองได้ใกล้เคียงกับเวลาจริงจาก FastF1 มากแค่ไหน
-        ยิ่ง % ต่างน้อย = โมเดลยิ่งแม่นยำ
-      </p>
-    </div>
-  </div>
 </header>
 
-<!-- ══════════════════════════════════════
-     กราฟ: Real vs Sim per driver (เส้น)
-═══════════════════════════════════════ -->
-<section class="space-y-3">
-  <h2 class="text-base font-bold tracking-tight flex items-center gap-2">
-    <span class="w-6 h-6 rounded-full bg-sky-500/20 text-sky-300 text-xs flex items-center justify-center font-bold">★</span>
-    ผลการตรวจสอบโมเดล — เวลาจริง vs เวลาที่ AI จำลองด้วย Parameter เดียวกัน
-  </h2>
-  <p class="text-xs text-slate-400">
-    ใช้ parameter <span class="text-slate-200 font-semibold">ชุดเดียวกับที่นักแข่งใช้จริง</span> แล้วดูว่า AI จำลองได้ใกล้เคียงแค่ไหน · ไม่ใช่การหากลยุทธ์ใหม่
+<div class="notice notice-warn">
+  <p class="notice-title">ขอบเขตของรายงาน</p>
+  <p>
+    ตัวเลขในหน้านี้คือการ <b>ตรวจสอบความถูกต้องของโมเดล</b> ไม่ใช่การหากลยุทธ์ที่ดีกว่า —
+    ทุก combination ใช้ parameter ชุดเดียวกับที่นักแข่งใช้จริงในการแข่ง แล้วเทียบว่าเวลาที่จำลองได้
+    ห่างจากเวลาจริงเท่าไร ยิ่ง % ต่างน้อย โมเดลยิ่งแม่นยำ
+    การค้นหากลยุทธ์ที่เร็วกว่าอยู่ในหน้า Strategy Analysis
+  </p>
+</div>
+
+<!-- ═══ Headline figures ═══════════════════════════════════ -->
+<section aria-label="สรุปผลรวมของโมเดล">
+  <div class="metrics cols-5">
+    <div class="metric">
+      <span class="metric-k">MAE</span>
+      <span class="metric-v">{{ "%.3f"|format(mae_overall) }}</span>
+      <span class="metric-u">s / lap · test set</span>
+    </div>
+    <div class="metric">
+      <span class="metric-k">RMSE</span>
+      <span class="metric-v">{{ "%.3f"|format(rmse_overall) }}</span>
+      <span class="metric-u">s / lap · test set</span>
+    </div>
+    <div class="metric">
+      <span class="metric-k">Avg deviation</span>
+      <span class="metric-v {% if avg_diff_pct|abs < 1 %}ok{% elif avg_diff_pct|abs < 3 %}warn{% else %}bad{% endif %}">
+        {{ "%+.2f"|format(avg_diff_pct) }}%
+      </span>
+      <span class="metric-u">sim vs real · tolerance ±1%</span>
+    </div>
+    <div class="metric">
+      <span class="metric-k">Laps evaluated</span>
+      <span class="metric-v">{{ total_laps_trained }}</span>
+      <span class="metric-u">{{ train_combos|length }} combinations</span>
+    </div>
+    <div class="metric">
+      <span class="metric-k">Train / test</span>
+      <span class="metric-v">80/20</span>
+      <span class="metric-u">random_state 42</span>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 01 · Validation results ════════════════════════════ -->
+<section aria-labelledby="val-h">
+  <div class="section-head">
+    <span class="section-no">01</span>
+    <h2 class="section-title" id="val-h">ผลการตรวจสอบ — เวลาจริง vs เวลาจำลอง</h2>
+    <span class="section-note">{{ train_combos|length }} combinations</span>
+  </div>
+  <p class="section-sub">
+    แต่ละจุดคือ 1 นักแข่งใน 1 สนาม จำลองด้วย parameter ชุดเดียวกับที่ใช้จริง
   </p>
 
-  <div class="bg-slate-900 rounded-2xl p-4 border border-slate-800 shadow">
-    <p class="text-xs text-slate-400 mb-1">เวลารวมทั้งการแข่งขัน (วินาที)</p>
-    <p class="text-[11px] text-slate-500 mb-3">🔵 เส้นฟ้า = เวลาจริง FastF1 &nbsp;|&nbsp; 🟡 เส้นเหลือง = AI จำลองด้วย parameter เดิม</p>
-    <div style="position:relative;height:280px"><canvas id="realVsSimLine"></canvas></div>
-  </div>
-
-  <div class="bg-slate-900 rounded-2xl p-4 border border-slate-800 shadow">
-    <p class="text-xs text-slate-400 mb-1">% ความต่างระหว่างเวลาที่ AI จำลอง กับเวลาจริง</p>
-    <p class="text-[11px] text-slate-500 mb-3">จุดสี: 🟢 ต่างน้อยกว่า 1% (แม่นมาก) &nbsp;|&nbsp; 🟡 1–3% &nbsp;|&nbsp; 🔴 มากกว่า 3% (ต้องปรับ)</p>
-    <div style="position:relative;height:160px"><canvas id="diffPctLine"></canvas></div>
-  </div>
-</section>
-
-<!-- ══════════════════════════════════════
-     1: Hyperparameters
-═══════════════════════════════════════ -->
-<section class="space-y-3">
-  <h2 class="text-base font-bold tracking-tight flex items-center gap-2">
-    <span class="w-6 h-6 rounded-full bg-emerald-500/20 text-emerald-300 text-xs flex items-center justify-center font-bold">1</span>
-    Random Forest — Hyperparameters ที่ใช้ Train
-  </h2>
-  <div class="grid gap-3 grid-cols-2 sm:grid-cols-3 md:grid-cols-5">
-    {% for p in hyperparams %}
-    <div class="bg-slate-900 rounded-2xl p-4 border border-slate-800">
-      <p class="text-[10px] text-slate-500 uppercase tracking-wide">{{ p.name }}</p>
-      <p class="text-xl font-bold text-emerald-300 mt-1 font-mono">{{ p.value }}</p>
-      <p class="text-[11px] text-slate-500 mt-1 leading-snug">{{ p.desc }}</p>
+  <div class="panel">
+    <div class="panel-head">
+      <h3 class="panel-title">เวลารวมทั้งการแข่งขัน</h3>
+      <span class="panel-note push">หน่วย: h:mm:ss</span>
     </div>
-    {% endfor %}
+    <div class="panel-body">
+      <div class="chart h-lg"><canvas id="realVsSimLine"></canvas></div>
+      <div class="legend" style="margin-top: 12px">
+        <span><i style="background: #C7CBD1"></i>เวลาจริง (FastF1)</span>
+        <span><i style="background: #E10600"></i>เวลาจำลอง (โมเดล)</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top: 14px">
+    <div class="panel-head">
+      <h3 class="panel-title">% ความต่างระหว่างเวลาจำลองกับเวลาจริง</h3>
+      <span class="panel-note push">0% = ตรงกับเวลาจริง</span>
+    </div>
+    <div class="panel-body">
+      <div class="chart h-sm"><canvas id="diffPctLine"></canvas></div>
+      <div class="legend" style="margin-top: 12px">
+        <span><i style="background: #46B37A"></i>ต่างน้อยกว่า 1%</span>
+        <span><i style="background: #D9A227"></i>1–3%</span>
+        <span><i style="background: #D8453C"></i>มากกว่า 3%</span>
+      </div>
+    </div>
   </div>
 </section>
 
-<!-- ══════════════════════════════════════
-     2: Features
-═══════════════════════════════════════ -->
-<section class="space-y-3">
-  <h2 class="text-base font-bold tracking-tight flex items-center gap-2">
-    <span class="w-6 h-6 rounded-full bg-sky-500/20 text-sky-300 text-xs flex items-center justify-center font-bold">2</span>
-    Input Features — Parameter ที่ใช้ทำนาย Lap Time
-  </h2>
-  <div class="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
-    <table class="w-full text-xs border-collapse">
-      <thead class="bg-slate-950/60 border-b border-slate-700 text-slate-400">
-        <tr>
-          <th class="py-2 px-4 text-left">Feature</th>
-          <th class="py-2 px-4 text-left">ประเภท</th>
-          <th class="py-2 px-4 text-left">คำอธิบาย</th>
-          <th class="py-2 px-4 text-center">Impact</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for f in features %}
-        <tr class="border-b border-slate-800/60 hover:bg-slate-800/30 transition">
-          <td class="py-2 px-4 font-mono text-emerald-300 font-semibold">{{ f.name }}</td>
-          <td class="py-2 px-4">
-            <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold
-              {% if f.type == 'Numeric' %}bg-sky-500/15 text-sky-300
-              {% elif f.type == 'One-Hot' %}bg-fuchsia-500/15 text-fuchsia-300
-              {% else %}bg-amber-500/15 text-amber-300{% endif %}">
-              {{ f.type }}
-            </span>
-          </td>
-          <td class="py-2 px-4 text-slate-300">{{ f.desc }}</td>
-          <td class="py-2 px-4 text-center">
-            <span class="inline-flex gap-0.5">
-              {% for i in range(5) %}
-              <span class="w-2 h-2 rounded-full {% if i < f.impact %}bg-emerald-400{% else %}bg-slate-700{% endif %}"></span>
-              {% endfor %}
-            </span>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+<!-- ═══ 02 · Per-combination results ═══════════════════════ -->
+<section aria-labelledby="combo-h">
+  <div class="section-head">
+    <span class="section-no">02</span>
+    <h2 class="section-title" id="combo-h">ผลรายละเอียดต่อ combination</h2>
+    <span class="section-note">real vs sim per driver</span>
   </div>
-  <p class="text-[11px] text-slate-500">Compound และ TrackStatus แปลง One-Hot ก่อน train · รวม {{ features|length }} features</p>
-</section>
 
-<!-- ══════════════════════════════════════
-     3: Training table
-═══════════════════════════════════════ -->
-<section class="space-y-3">
-  <h2 class="text-base font-bold tracking-tight flex items-center gap-2">
-    <span class="w-6 h-6 rounded-full bg-fuchsia-500/20 text-fuchsia-300 text-xs flex items-center justify-center font-bold">3</span>
-    Training Data — {{ train_combos|length }} combinations
-  </h2>
-  <div class="bg-slate-900 rounded-2xl border border-slate-800 overflow-x-auto shadow">
-    <table class="w-full text-xs border-collapse min-w-[700px]">
-      <thead class="bg-slate-950/60 border-b border-slate-700 text-slate-400">
-        <tr>
-          <th class="py-2 px-3 text-left">#</th>
-          <th class="py-2 px-3 text-left">ปี</th>
-          <th class="py-2 px-3 text-left">สนาม</th>
-          <th class="py-2 px-3 text-left">Driver</th>
-          <th class="py-2 px-3 text-right">เวลาจริง</th>
-          <th class="py-2 px-3 text-right">เวลาจำลอง</th>
-          <th class="py-2 px-3 text-right">ต่าง (s)</th>
-          <th class="py-2 px-3 text-right">MAE</th>
-          <th class="py-2 px-3 text-right">% ต่าง</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for c in train_combos %}
-        <tr class="border-b border-slate-800/60 hover:bg-slate-800/30 transition">
-          <td class="py-2 px-3 text-slate-500">{{ loop.index }}</td>
-          <td class="py-2 px-3 font-semibold text-slate-200">{{ c.year }}</td>
-          <td class="py-2 px-3 text-slate-200">{{ c.gp }}</td>
-          <td class="py-2 px-3">
-            <span class="px-2 py-0.5 rounded-full bg-slate-800 text-slate-200 font-mono font-semibold text-[11px]">{{ c.driver }}</span>
-          </td>
-          <td class="py-2 px-3 text-right font-mono">
-            <span class="text-sky-300">{{ "%d:%02d:%02d"|format((c.real_total//3600)|int,((c.real_total%3600)//60)|int,(c.real_total%60)|int) }}</span>
-            <span class="text-slate-500 text-[10px] block">{{ "%.1f"|format(c.real_total) }} s</span>
-          </td>
-          <td class="py-2 px-3 text-right font-mono">
-            <span class="text-amber-300">{{ "%d:%02d:%02d"|format((c.sim_total//3600)|int,((c.sim_total%3600)//60)|int,(c.sim_total%60)|int) }}</span>
-            <span class="text-slate-500 text-[10px] block">{{ "%.1f"|format(c.sim_total) }} s</span>
-          </td>
-          <td class="py-2 px-3 text-right font-mono font-semibold
-            {% if (c.sim_total-c.real_total)|abs < 20 %}text-emerald-300
-            {% elif (c.sim_total-c.real_total)|abs < 50 %}text-amber-300
-            {% else %}text-red-400{% endif %}">
-            {{ "%+.1f"|format(c.sim_total - c.real_total) }}
-          </td>
-          <td class="py-2 px-3 text-right font-mono text-slate-300">{{ "%.3f"|format(c.mae) }}</td>
-          <td class="py-2 px-3 text-right">
-            <span class="font-bold font-mono
-              {% if c.diff_pct|abs < 1.0 %}text-emerald-400
-              {% elif c.diff_pct|abs < 3.0 %}text-amber-400
-              {% else %}text-red-400{% endif %}">
+  <div class="panel">
+    <div class="tbl-wrap" tabindex="0" role="region" aria-label="ตารางผลการตรวจสอบต่อ combination">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th scope="col" style="width: 40px">#</th>
+            <th scope="col">Year</th>
+            <th scope="col">Grand Prix</th>
+            <th scope="col">Driver</th>
+            <th scope="col" class="t-ctr col-opt">Laps</th>
+            <th scope="col" class="t-num">Real</th>
+            <th scope="col" class="t-num">Sim</th>
+            <th scope="col" class="t-num">Delta</th>
+            <th scope="col" class="t-num col-opt">MAE</th>
+            <th scope="col" class="t-num">Deviation</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in train_combos %}
+          <tr>
+            <td class="dim">{{ loop.index }}</td>
+            <td>{{ c.year }}</td>
+            <td class="wrap">{{ c.gp }}</td>
+            <td style="font-weight: 500">{{ c.driver }}</td>
+            <td class="t-ctr col-opt dim">{{ c.laps }}</td>
+            <td class="t-num">
+              {{ "%d:%02d:%02d"|format((c.real_total//3600)|int,((c.real_total%3600)//60)|int,(c.real_total%60)|int) }}
+              <span class="sub">{{ "%.1f"|format(c.real_total) }} s</span>
+            </td>
+            <td class="t-num">
+              {{ "%d:%02d:%02d"|format((c.sim_total//3600)|int,((c.sim_total%3600)//60)|int,(c.sim_total%60)|int) }}
+              <span class="sub">{{ "%.1f"|format(c.sim_total) }} s</span>
+            </td>
+            <td class="t-num {% if (c.sim_total-c.real_total)|abs < 20 %}ok{% elif (c.sim_total-c.real_total)|abs < 50 %}warn{% else %}bad{% endif %}">
+              {{ "%+.1f"|format(c.sim_total - c.real_total) }}
+            </td>
+            <td class="t-num col-opt fg2">{{ "%.3f"|format(c.mae) }}</td>
+            <td class="t-num {% if c.diff_pct|abs < 1.0 %}ok{% elif c.diff_pct|abs < 3.0 %}warn{% else %}bad{% endif %}"
+                style="font-weight: 500">
               {{ "%+.2f"|format(c.diff_pct) }}%
-            </span>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-      <tfoot class="bg-slate-950/40 border-t border-slate-700">
-        <tr>
-          <td colspan="4" class="py-2 px-3 text-slate-400 text-[11px]">เฉลี่ยรวม</td>
-          <td colspan="3" class="py-2 px-3"></td>
-          <td class="py-2 px-3 text-right font-mono font-bold text-emerald-300">{{ "%.3f"|format(mae_overall) }}</td>
-          <td class="py-2 px-3 text-right font-mono font-bold text-emerald-300">{{ "%+.2f"|format(avg_diff_pct) }}%</td>
-        </tr>
-      </tfoot>
-    </table>
-  </div>
-  <div class="flex gap-4 flex-wrap text-[11px] text-slate-500">
-    <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-sky-300 inline-block"></span>เวลาจริง (FastF1)</span>
-    <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-amber-300 inline-block"></span>เวลาจำลอง (AI)</span>
-    <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span>&lt;1%</span>
-    <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-amber-400 inline-block"></span>1–3%</span>
-    <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-red-400 inline-block"></span>&gt;3%</span>
-  </div>
-</section>
-
-<!-- ══════════════════════════════════════
-     4: Overall model score
-═══════════════════════════════════════ -->
-<section class="space-y-3">
-  <h2 class="text-base font-bold tracking-tight flex items-center gap-2">
-    <span class="w-6 h-6 rounded-full bg-amber-500/20 text-amber-300 text-xs flex items-center justify-center font-bold">4</span>
-    ผลรวมโมเดล
-  </h2>
-  <div class="grid gap-4 sm:grid-cols-2 md:grid-cols-4">
-    <div class="bg-slate-900 rounded-2xl p-4 border border-emerald-500/40">
-      <p class="text-xs text-slate-400">MAE (Test Set)</p>
-      <p class="text-3xl font-bold text-emerald-300 mt-1 font-mono">{{ "%.3f"|format(mae_overall) }}</p>
-      <p class="text-[11px] text-slate-500 mt-1">วินาที / lap เฉลี่ย</p>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="4">รวมทั้งหมด</td>
+            <td class="t-ctr col-opt">{{ total_laps_trained }}</td>
+            <td colspan="3"></td>
+            <td class="t-num col-opt">{{ "%.3f"|format(mae_overall) }}</td>
+            <td class="t-num">{{ "%+.2f"|format(avg_diff_pct) }}%</td>
+          </tr>
+        </tfoot>
+      </table>
     </div>
-    <div class="bg-slate-900 rounded-2xl p-4 border border-sky-500/40">
-      <p class="text-xs text-slate-400">RMSE (Test Set)</p>
-      <p class="text-3xl font-bold text-sky-300 mt-1 font-mono">{{ "%.3f"|format(rmse_overall) }}</p>
-      <p class="text-[11px] text-slate-500 mt-1">วินาที / lap</p>
-    </div>
-    <div class="bg-slate-900 rounded-2xl p-4 border border-slate-800">
-      <p class="text-xs text-slate-400">Lap ทั้งหมด</p>
-      <p class="text-3xl font-bold text-slate-200 mt-1 font-mono">{{ total_laps_trained }}</p>
-      <p class="text-[11px] text-slate-500 mt-1">จากทุก combination</p>
-    </div>
-    <div class="bg-slate-900 rounded-2xl p-4 border border-slate-800">
-      <p class="text-xs text-slate-400">Train / Test Split</p>
-      <p class="text-3xl font-bold text-slate-200 mt-1 font-mono">80/20</p>
-      <p class="text-[11px] text-slate-500 mt-1">random_state = 42</p>
+    <div class="panel-foot">
+      Delta = เวลาจำลอง − เวลาจริง (วินาที) · Deviation = Delta คิดเป็น % ของเวลาจริง
     </div>
   </div>
 </section>
 
-<!-- ══════════════════════════════════════
-     5: Same-param compare
-═══════════════════════════════════════ -->
-<section class="space-y-3">
-  <h2 class="text-base font-bold tracking-tight flex items-center gap-2">
-    <span class="w-6 h-6 rounded-full bg-rose-500/20 text-rose-300 text-xs flex items-center justify-center font-bold">5</span>
-    Parameter เดียวกัน — ต่างกัน % ระหว่างนักแข่ง
-  </h2>
-  <p class="text-xs text-slate-400">ใช้ feature set เดียวกันในสนามเดียวกัน เปรียบ deviation ระหว่าง driver</p>
-  <div class="bg-slate-900 rounded-2xl border border-slate-800 overflow-x-auto shadow">
-    <table class="w-full text-xs border-collapse min-w-[680px]">
-      <thead class="bg-slate-950/60 border-b border-slate-700 text-slate-400">
-        <tr>
-          <th class="py-2 px-3 text-left">สนาม / ปี</th>
-          <th class="py-2 px-3 text-left">Driver A</th>
-          <th class="py-2 px-2 text-right">จริง (s)</th>
-          <th class="py-2 px-2 text-right">จำลอง (s)</th>
-          <th class="py-2 px-2 text-right">% ต่าง A</th>
-          <th class="py-2 px-3 text-left">Driver B</th>
-          <th class="py-2 px-2 text-right">จริง (s)</th>
-          <th class="py-2 px-2 text-right">จำลอง (s)</th>
-          <th class="py-2 px-2 text-right">% ต่าง B</th>
-          <th class="py-2 px-3 text-right">ห่างกัน</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in same_param_compare %}
-        <tr class="border-b border-slate-800/60 hover:bg-slate-800/30 transition">
-          <td class="py-2 px-3 text-slate-200">{{ row.gp }} {{ row.year }}</td>
-          <td class="py-2 px-3 font-mono font-semibold text-slate-200">{{ row.driver_a }}</td>
-          <td class="py-2 px-2 text-right font-mono text-sky-300">{{ "%.1f"|format(row.real_a) }}</td>
-          <td class="py-2 px-2 text-right font-mono text-amber-300">{{ "%.1f"|format(row.sim_a) }}</td>
-          <td class="py-2 px-2 text-right font-mono font-semibold
-            {% if row.diff_a|abs < 1 %}text-emerald-400{% elif row.diff_a|abs < 3 %}text-amber-400{% else %}text-red-400{% endif %}">
-            {{ "%+.2f"|format(row.diff_a) }}%
-          </td>
-          <td class="py-2 px-3 font-mono font-semibold text-slate-200">{{ row.driver_b }}</td>
-          <td class="py-2 px-2 text-right font-mono text-sky-300">{{ "%.1f"|format(row.real_b) }}</td>
-          <td class="py-2 px-2 text-right font-mono text-amber-300">{{ "%.1f"|format(row.sim_b) }}</td>
-          <td class="py-2 px-2 text-right font-mono font-semibold
-            {% if row.diff_b|abs < 1 %}text-emerald-400{% elif row.diff_b|abs < 3 %}text-amber-400{% else %}text-red-400{% endif %}">
-            {{ "%+.2f"|format(row.diff_b) }}%
-          </td>
-          <td class="py-2 px-3 text-right font-bold font-mono text-fuchsia-300">
-            {{ "%.2f"|format((row.diff_a - row.diff_b)|abs) }}%
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+<!-- ═══ 03 · Cross-driver deviation ════════════════════════ -->
+<section aria-labelledby="cross-h">
+  <div class="section-head">
+    <span class="section-no">03</span>
+    <h2 class="section-title" id="cross-h">ความต่างระหว่างนักแข่งใน parameter ชุดเดียวกัน</h2>
+    <span class="section-note">{{ same_param_compare|length }} pairs</span>
   </div>
-  <p class="text-[11px] text-slate-500">"ห่างกัน" = ผลต่างของ % deviation ระหว่างสองนักแข่งในสนามเดียวกัน</p>
+  <p class="section-sub">
+    ใช้ feature set เดียวกันในสนามเดียวกัน เทียบว่า deviation ของแต่ละนักแข่งห่างกันเท่าไร
+  </p>
+
+  <div class="panel">
+    <div class="tbl-wrap" tabindex="0" role="region" aria-label="ตารางเปรียบเทียบ deviation ระหว่างนักแข่ง">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th scope="col">Grand Prix</th>
+            <th scope="col">Driver A</th>
+            <th scope="col" class="t-num col-opt">Real A</th>
+            <th scope="col" class="t-num col-opt">Sim A</th>
+            <th scope="col" class="t-num">Dev A</th>
+            <th scope="col">Driver B</th>
+            <th scope="col" class="t-num col-opt">Real B</th>
+            <th scope="col" class="t-num col-opt">Sim B</th>
+            <th scope="col" class="t-num">Dev B</th>
+            <th scope="col" class="t-num">Spread</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in same_param_compare %}
+          <tr>
+            <td class="wrap">{{ row.gp }} {{ row.year }}</td>
+            <td style="font-weight: 500">{{ row.driver_a }}</td>
+            <td class="t-num col-opt fg2">{{ "%.1f"|format(row.real_a) }}</td>
+            <td class="t-num col-opt fg2">{{ "%.1f"|format(row.sim_a) }}</td>
+            <td class="t-num {% if row.diff_a|abs < 1 %}ok{% elif row.diff_a|abs < 3 %}warn{% else %}bad{% endif %}">
+              {{ "%+.2f"|format(row.diff_a) }}%
+            </td>
+            <td style="font-weight: 500">{{ row.driver_b }}</td>
+            <td class="t-num col-opt fg2">{{ "%.1f"|format(row.real_b) }}</td>
+            <td class="t-num col-opt fg2">{{ "%.1f"|format(row.sim_b) }}</td>
+            <td class="t-num {% if row.diff_b|abs < 1 %}ok{% elif row.diff_b|abs < 3 %}warn{% else %}bad{% endif %}">
+              {{ "%+.2f"|format(row.diff_b) }}%
+            </td>
+            <td class="t-num" style="font-weight: 500">{{ "%.2f"|format((row.diff_a - row.diff_b)|abs) }}%</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="panel-foot">Spread = ผลต่างของ deviation ระหว่างสองนักแข่งในสนามเดียวกัน</div>
+  </div>
+</section>
+
+<!-- ═══ 04 · Model configuration ═══════════════════════════ -->
+<section aria-labelledby="cfg-h">
+  <div class="section-head">
+    <span class="section-no">04</span>
+    <h2 class="section-title" id="cfg-h">Model configuration</h2>
+    <span class="section-note">RandomForestRegressor</span>
+  </div>
+
+  <div class="panel">
+    <div class="tbl-wrap" tabindex="0" role="region" aria-label="ตาราง hyperparameters">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th scope="col">Hyperparameter</th>
+            <th scope="col" class="t-num">Value</th>
+            <th scope="col" class="wrap">คำอธิบาย</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in hyperparams %}
+          <tr>
+            <td>{{ p.name }}</td>
+            <td class="t-num" style="font-weight: 500">{{ p.value }}</td>
+            <td class="wrap fg2">{{ p.desc }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 05 · Input features ════════════════════════════════ -->
+<section aria-labelledby="feat-h">
+  <div class="section-head">
+    <span class="section-no">05</span>
+    <h2 class="section-title" id="feat-h">Input features</h2>
+    <span class="section-note">{{ features|length }} features</span>
+  </div>
+  <p class="section-sub">
+    Compound และ TrackStatus แปลงเป็น one-hot ก่อน train · Impact คือน้ำหนักที่ feature นั้นมีต่อการทำนาย lap time
+  </p>
+
+  <div class="panel">
+    <div class="tbl-wrap" tabindex="0" role="region" aria-label="ตาราง input features">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th scope="col">Feature</th>
+            <th scope="col" class="col-opt">Type</th>
+            <th scope="col" class="wrap">คำอธิบาย</th>
+            <th scope="col" class="t-ctr">Impact</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for f in features %}
+          <tr>
+            <td style="font-weight: 500">{{ f.name }}</td>
+            <td class="col-opt dim" style="text-transform: uppercase; letter-spacing: 0.06em; font-size: 10.5px">{{ f.type }}</td>
+            <td class="wrap fg2">{{ f.desc }}</td>
+            <td class="t-ctr">
+              <span class="impact" role="img" aria-label="impact {{ f.impact }} จาก 5">
+                {% for i in range(5) %}<i class="{% if i < f.impact %}on{% endif %}"></i>{% endfor %}
+              </span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
 </section>
 
 {% endblock %}
@@ -281,15 +297,45 @@
 {% block scripts %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-  const combos  = JSON.parse('{{ chart_combos | tojson | safe }}');
-  const labels  = combos.map(c => c.driver + " " + c.gp.slice(0,3) + "'" + String(c.year).slice(-2));
-  const reals   = combos.map(c => c.real_total);
-  const sims    = combos.map(c => c.sim_total);
-  const diffs   = combos.map(c => c.diff_pct);
-  const grid    = "rgba(55,65,81,0.4)";
+document.addEventListener('DOMContentLoaded', function () {
+  const combos = JSON.parse('{{ chart_combos | tojson | safe }}');
+  const labels = combos.map(c => c.driver + " " + c.gp.slice(0, 3).toUpperCase() + "'" + String(c.year).slice(-2));
+  const reals  = combos.map(c => c.real_total);
+  const sims   = combos.map(c => c.sim_total);
+  const diffs  = combos.map(c => c.diff_pct);
 
-  // ── กราฟเส้น Real vs Sim ──────────────────────────────
+  const INK   = "#E9EAED";
+  const MUTED = "#71757F";
+  const LINE  = "#3A3D45";
+  const GRID  = "rgba(255,255,255,0.05)";
+  const MONO  = "'IBM Plex Mono', ui-monospace, monospace";
+  const STEEL = "#C7CBD1";
+  const RED   = "#E10600";
+
+  Chart.defaults.font.family = MONO;
+  Chart.defaults.font.size   = 10;
+  Chart.defaults.color       = MUTED;
+
+  const clock = v => {
+    const h = Math.floor(v / 3600), m = Math.floor((v % 3600) / 60), s = Math.floor(v % 60);
+    return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  };
+  const tolColor = d => Math.abs(d) < 1 ? "#46B37A" : Math.abs(d) < 3 ? "#D9A227" : "#D8453C";
+
+  const tooltipStyle = {
+    backgroundColor: "#0D0E10",
+    borderColor: LINE,
+    borderWidth: 1,
+    titleColor: INK,
+    bodyColor: INK,
+    cornerRadius: 3,
+    padding: 10,
+    displayColors: false,
+    titleFont: { family: MONO, size: 10 },
+    bodyFont: { family: MONO, size: 11 },
+  };
+
+  // ── เวลาจริง vs เวลาจำลอง ─────────────────────────────
   new Chart(document.getElementById("realVsSimLine"), {
     type: "line",
     data: {
@@ -298,90 +344,92 @@ document.addEventListener('DOMContentLoaded', function() {
         {
           label: "เวลาจริง (s)",
           data: reals,
-          borderColor: "rgba(56,189,248,1)",
-          backgroundColor: "rgba(56,189,248,0.1)",
-          tension: 0.35, pointRadius: 5, pointHoverRadius: 7,
-          borderWidth: 2, fill: false,
+          borderColor: STEEL,
+          backgroundColor: STEEL,
+          borderWidth: 1.5, tension: 0, fill: false,
+          pointRadius: 3, pointHoverRadius: 5, pointStyle: "rect",
         },
         {
-          label: "เวลาจำลอง AI (s)",
+          label: "เวลาจำลอง (s)",
           data: sims,
-          borderColor: "rgba(251,191,36,1)",
-          backgroundColor: "rgba(251,191,36,0.1)",
-          tension: 0.35, pointRadius: 5, pointHoverRadius: 7,
-          borderWidth: 2, borderDash: [5,3], fill: false,
+          borderColor: RED,
+          backgroundColor: RED,
+          borderWidth: 1.5, tension: 0, fill: false, borderDash: [4, 3],
+          pointRadius: 3, pointHoverRadius: 5, pointStyle: "rect",
         },
       ],
     },
     options: {
-      responsive: true, maintainAspectRatio: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
       plugins: {
-        legend: { labels: { color: "#e2e8f0", font: { size: 11 } } },
+        legend: { display: false },
         tooltip: {
-          callbacks: {
-            label: ctx => {
-              const v = ctx.parsed.y;
-              const h = Math.floor(v/3600), m = Math.floor((v%3600)/60), s = Math.floor(v%60);
-              return `${ctx.dataset.label}: ${h}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")} (${v.toFixed(1)} s)`;
-            }
-          }
-        }
+          ...tooltipStyle,
+          callbacks: { label: ctx => `${ctx.dataset.label}: ${clock(ctx.parsed.y)} (${ctx.parsed.y.toFixed(1)} s)` },
+        },
       },
       scales: {
-        x: { ticks: { color: "#94a3b8", font: { size: 10 }, maxRotation: 35 }, grid: { color: grid } },
+        x: {
+          ticks: { color: MUTED, maxRotation: 40, minRotation: 40 },
+          grid: { color: GRID, drawTicks: false },
+          border: { color: LINE },
+        },
         y: {
-          ticks: {
-            color: "#94a3b8", font: { size: 10 },
-            callback: v => {
-              const h = Math.floor(v/3600), m = Math.floor((v%3600)/60), s = Math.floor(v%60);
-              return `${h}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
-            }
-          },
-          grid: { color: grid },
-          title: { display: true, text: "เวลารวม (วินาที)", color: "#94a3b8", font: { size: 10 } },
+          ticks: { color: MUTED, callback: v => clock(v) },
+          grid: { color: GRID, drawTicks: false },
+          border: { color: LINE },
+          title: { display: true, text: "TOTAL RACE TIME", color: MUTED, font: { size: 10 } },
         },
       },
     },
   });
 
-  // ── กราฟเส้น % diff ───────────────────────────────────
+  // ── % deviation ───────────────────────────────────────
   new Chart(document.getElementById("diffPctLine"), {
     type: "line",
     data: {
       labels,
       datasets: [{
-        label: "% ต่าง (จำลอง - จริง)",
+        label: "deviation",
         data: diffs,
-        borderColor: "rgba(167,139,250,1)",
-        backgroundColor: "rgba(167,139,250,0.1)",
-        tension: 0.35, pointRadius: 5, pointHoverRadius: 7,
-        borderWidth: 2, fill: true,
-        pointBackgroundColor: diffs.map(d =>
-          Math.abs(d) < 1 ? "rgba(52,211,153,1)" :
-          Math.abs(d) < 3 ? "rgba(251,191,36,1)" : "rgba(248,113,113,1)"
-        ),
-        pointBorderColor: diffs.map(d =>
-          Math.abs(d) < 1 ? "rgba(52,211,153,1)" :
-          Math.abs(d) < 3 ? "rgba(251,191,36,1)" : "rgba(248,113,113,1)"
-        ),
+        borderColor: MUTED,
+        borderWidth: 1,
+        tension: 0,
+        fill: false,
+        pointRadius: 4,
+        pointHoverRadius: 6,
+        pointStyle: "rect",
+        pointBackgroundColor: diffs.map(tolColor),
+        pointBorderColor: diffs.map(tolColor),
       }],
     },
     options: {
-      responsive: true, maintainAspectRatio: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
       plugins: {
         legend: { display: false },
-        tooltip: { callbacks: { label: ctx => `${ctx.parsed.y > 0 ? "+" : ""}${ctx.parsed.y.toFixed(2)}%` } },
+        tooltip: {
+          ...tooltipStyle,
+          callbacks: { label: ctx => `deviation: ${ctx.parsed.y > 0 ? "+" : ""}${ctx.parsed.y.toFixed(2)}%` },
+        },
       },
       scales: {
-        x: { ticks: { color: "#94a3b8", font: { size: 10 }, maxRotation: 35 }, grid: { color: grid } },
+        x: {
+          ticks: { color: MUTED, maxRotation: 40, minRotation: 40 },
+          grid: { color: GRID, drawTicks: false },
+          border: { color: LINE },
+        },
         y: {
-          ticks: { color: "#94a3b8", font: { size: 10 }, callback: v => `${v > 0 ? "+" : ""}${v.toFixed(1)}%` },
-          grid: { color: grid },
-          title: { display: true, text: "% ต่าง", color: "#94a3b8", font: { size: 10 } },
+          ticks: { color: MUTED, callback: v => `${v > 0 ? "+" : ""}${v.toFixed(1)}%` },
+          grid: { color: GRID, drawTicks: false },
+          border: { color: LINE },
         },
       },
     },
   });
-}); // DOMContentLoaded
+});
 </script>
 {% endblock %}
