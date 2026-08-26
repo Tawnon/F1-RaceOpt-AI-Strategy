@@ -40,10 +40,16 @@ def train_advanced_model():
 
     # แยก X, y
     y = combined_data["LapTimeSec"].values
-    X = combined_data.drop(columns=["LapTimeSec"])
+    # Sector times are only known after a lap finishes, so they cannot be
+    # used when forecasting a future lap.
+    X = combined_data.drop(
+        columns=["LapTimeSec", "Sector1Sec", "Sector2Sec", "Sector3Sec"],
+        errors="ignore",
+    )
 
     # ลบ column ที่ไม่ใช่ตัวเลข (เผื่อมีหลงเหลือ)
-    X = X.select_dtypes(include=[np.number])
+    X = X.select_dtypes(include=[np.number, "bool"])
+    X = X.astype(float)
     feature_cols = X.columns.tolist()
 
     X_train, X_test, y_train, y_test = train_test_split(

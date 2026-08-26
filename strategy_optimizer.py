@@ -31,12 +31,16 @@ def simulate_strategy(
     num_stops: int = 1,
     second_pit_lap: int = None,
     third_compound: str = None,
+    driver_code: str = None,
+    gp_label: str = None,
+    race_year: int = None,
 ) -> float:
     """
     จำลอง race time สำหรับกลยุทธ์หนึ่งๆ
     รองรับ 1-stop และ 2-stop
     """
-    total_time = 0.0
+    rows = []
+    lap_penalties = []
     stint = 1
     pit_stops = 0
     compound = first_compound.upper()
@@ -82,11 +86,110 @@ def simulate_strategy(
         })
         feat.update(_compound_one_hot(compound))
 
-        X = pd.DataFrame([feat], columns=feature_cols)
-        lap_time = float(model.predict(X)[0]) + pace_offset + pit_penalty
-        total_time += lap_time
+        if driver_code:
+            driver_key = f"DriverCode_{driver_code}"
+            if driver_key in feat:
+                feat[driver_key] = 1
+        if gp_label:
+            gp_key = f"GP_Label_{gp_label}"
+            if gp_key in feat:
+                feat[gp_key] = 1
+        if race_year is not None and "RaceYear" in feat:
+            feat["RaceYear"] = race_year
+
+        rows.append(feat)
+        lap_penalties.append(pit_penalty)
+
+    X = pd.DataFrame(rows, columns=feature_cols)
+    predicted_laps = model.predict(X)
+    total_time = sum(
+        float(lap_time) + pace_offset + pit_penalty
+        for lap_time, pit_penalty in zip(predicted_laps, lap_penalties)
+    )
 
     return total_time
+
+
+def _simulate_strategy_batch(
+    model,
+    feature_cols: list,
+    total_laps: int,
+    strategies: list,
+    pace_offset: float = 0.0,
+    driver_code: str = None,
+    gp_label: str = None,
+    race_year: int = None,
+) -> list:
+    rows = []
+    segments = []
+
+    for first_compound, second_compound, pit_lap, num_stops, second_pit_lap, third_compound in strategies:
+        stint = 1
+        pit_stops = 0
+        compound = first_compound.upper()
+        strategy_rows = []
+        lap_penalties = []
+
+        for lap in range(1, total_laps + 1):
+            pit_penalty = 0.0
+            if lap == pit_lap:
+                pit_stops += 1
+                stint = 2
+                compound = second_compound.upper()
+                tyre_life = 1
+                pit_penalty = PIT_LOSS
+            elif num_stops == 2 and second_pit_lap and lap == second_pit_lap:
+                pit_stops += 1
+                stint = 3
+                compound = (third_compound or "HARD").upper()
+                tyre_life = 1
+                pit_penalty = PIT_LOSS
+            elif stint == 1:
+                tyre_life = lap
+            elif stint == 2:
+                tyre_life = lap - pit_lap + 1
+            else:
+                tyre_life = lap - second_pit_lap + 1
+
+            feat = {f: 0.0 for f in feature_cols}
+            feat.update({
+                "LapNumber": lap,
+                "TyreLife": tyre_life,
+                "FuelEst": (total_laps - lap) / total_laps,
+                "StintNumber": stint,
+                "StintLap": tyre_life,
+                "PitStopsSoFar": pit_stops,
+                "IsInLap": 1 if pit_penalty > 0 else 0,
+                "IsOutLap": 0,
+                "TrackStatus_1": 1,
+                "Position": 1,
+            })
+            feat.update(_compound_one_hot(compound))
+            if driver_code and f"DriverCode_{driver_code}" in feat:
+                feat[f"DriverCode_{driver_code}"] = 1
+            if gp_label and f"GP_Label_{gp_label}" in feat:
+                feat[f"GP_Label_{gp_label}"] = 1
+            if race_year is not None and "RaceYear" in feat:
+                feat["RaceYear"] = race_year
+            strategy_rows.append(feat)
+            lap_penalties.append(pit_penalty)
+
+        rows.extend(strategy_rows)
+        segments.append(lap_penalties)
+
+    predicted_laps = model.predict(pd.DataFrame(rows, columns=feature_cols))
+    results = []
+    offset = 0
+    for lap_penalties in segments:
+        lap_count = len(lap_penalties)
+        results.append(sum(
+            float(lap_time) + pace_offset + pit_penalty
+            for lap_time, pit_penalty in zip(
+                predicted_laps[offset:offset + lap_count], lap_penalties
+            )
+        ))
+        offset += lap_count
+    return results
 
 
 def calibrate_pace_offset(
@@ -128,6 +231,9 @@ def grid_search_strategies(
     real_lap_times: list,
     total_laps: int,
     pace_offset: float = 0.0,
+    driver_code: str = None,
+    gp_label: str = None,
+    race_year: int = None,
 ) -> list:
     """
     ลอง compound + pit_lap ทุก combination
@@ -146,15 +252,17 @@ def grid_search_strategies(
     results = []
 
     # 1-stop
-    for c1, c2, pit in product(compounds, compounds, pit_laps):
-        if c1 == c2:
-            continue
-        sim = simulate_strategy(
-            model, feature_cols, total_laps,
-            c1, c2, pit,
-            pace_offset=pace_offset,
-            num_stops=1,
-        )
+    one_stop_specs = [
+        (c1, c2, pit, 1, None, None)
+        for c1, c2, pit in product(compounds, compounds, pit_laps)
+        if c1 != c2
+    ]
+    one_stop_times = _simulate_strategy_batch(
+        model, feature_cols, total_laps, one_stop_specs,
+        pace_offset=pace_offset, driver_code=driver_code,
+        gp_label=gp_label, race_year=race_year,
+    )
+    for (c1, c2, pit, _, _, _), sim in zip(one_stop_specs, one_stop_times):
         delta = sim - real_total
         results.append({
             "num_stops":       1,
@@ -180,17 +288,17 @@ def grid_search_strategies(
     pit1_options = [int(total_laps * 0.25), int(total_laps * 0.30)]
     pit2_options = [int(total_laps * 0.55), int(total_laps * 0.60)]
 
-    for (c1, c2, c3), p1, p2 in product(two_stop_combos, pit1_options, pit2_options):
-        if p1 >= p2:
-            continue
-        sim = simulate_strategy(
-            model, feature_cols, total_laps,
-            c1, c2, p1,
-            pace_offset=pace_offset,
-            num_stops=2,
-            second_pit_lap=p2,
-            third_compound=c3,
-        )
+    two_stop_specs = [
+        (c1, c2, p1, 2, p2, c3)
+        for (c1, c2, c3), p1, p2 in product(two_stop_combos, pit1_options, pit2_options)
+        if p1 < p2
+    ]
+    two_stop_times = _simulate_strategy_batch(
+        model, feature_cols, total_laps, two_stop_specs,
+        pace_offset=pace_offset, driver_code=driver_code,
+        gp_label=gp_label, race_year=race_year,
+    )
+    for (c1, c2, p1, _, p2, c3), sim in zip(two_stop_specs, two_stop_times):
         delta = sim - real_total
         results.append({
             "num_stops":       2,

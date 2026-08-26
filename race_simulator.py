@@ -81,8 +81,12 @@ def simulate_driver(
     predictor: LapPredictor,
     strategy: DriverStrategy,
     total_laps: int,
+    gp_label: str = None,
+    race_year: int = None,
+    random_seed: int = None,
 ) -> DriverResult:
     laps = []
+    rng = np.random.default_rng(random_seed)
     stint_number = 1
     pit_stops = 0
     current_compound = strategy.first_compound
@@ -114,8 +118,18 @@ def simulate_driver(
         }
         feat.update(_compound_one_hot(current_compound))
 
+        driver_key = f"DriverCode_{strategy.code}"
+        if driver_key in feat:
+            feat[driver_key] = 1
+        if gp_label:
+            gp_key = f"GP_Label_{gp_label}"
+            if gp_key in feat:
+                feat[gp_key] = 1
+        if race_year is not None:
+            feat["RaceYear"] = race_year
+
         base_lap = predictor.predict_lap(feat)
-        lap_time = base_lap + strategy.pace_offset + np.random.normal(0, 0.12)
+        lap_time = base_lap + strategy.pace_offset + rng.normal(0, 0.12)
         lap_time += pit_penalty
         laps.append(lap_time)
 
@@ -131,6 +145,9 @@ def simulate_full_race(
     model_path: str = "model.pkl",
     total_laps: int = 57,
     global_offset: float = 0.0,
+    gp_label: str = None,
+    race_year: int = None,
+    random_seed: int = None,
 ) -> List[DriverResult]:
     predictor = LapPredictor(model_path)
 
@@ -145,8 +162,13 @@ def simulate_full_race(
         ))
 
     results = []
-    for st in strategies:
-        results.append(simulate_driver(predictor, st, total_laps))
+    for index, st in enumerate(strategies):
+        results.append(simulate_driver(
+            predictor, st, total_laps,
+            gp_label=gp_label,
+            race_year=race_year,
+            random_seed=None if random_seed is None else random_seed + index,
+        ))
 
     results.sort(key=lambda r: r.total_time)
     for i, r in enumerate(results, start=1):

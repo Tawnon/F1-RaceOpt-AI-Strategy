@@ -9,7 +9,8 @@ import fastf1
 
 from data_pipeline import load_race_laps, AVAILABLE_RACES, AVAILABLE_DRIVERS
 from race_simulator import (simulate_full_race, compute_win_probabilities,
-                             simulate_driver, DriverStrategy, LapPredictor)
+                             simulate_driver, DriverStrategy, LapPredictor,
+                             DEFAULT_STRATEGIES, DRIVER_PACE)
 from strategy_optimizer import calibrate_pace_offset, grid_search_strategies, explain_parameters
 
 app = Flask(__name__)
@@ -306,6 +307,19 @@ def fmt_time(t):
     t = abs(int(t)); m, s = divmod(t, 60); h, m = divmod(m, 60)
     return f"{h:d}:{m:02d}:{s:02d}"
 
+
+def _forecast_reference_total(total_laps: int, gp_name: str = None) -> float:
+    """Estimate a future race total from historical per-lap race pace."""
+    matching = [
+        c for c in TRAIN_COMBO_STATS
+        if gp_name and c["gp"] == gp_name
+    ]
+    source = matching or TRAIN_COMBO_STATS
+    reference_lap = float(np.median([
+        c["real_total"] / c["laps"] for c in source
+    ]))
+    return reference_lap * total_laps
+
 # ── ข้อมูล training combinations พร้อม per-driver stats ─
 # (ค่า mae/rmse/diff_pct นี้ได้จากการรัน train_model_advanced.py จริง
 #  หากมี model.pkl ที่บันทึก per-combo stats ก็ดึงจากนั้นได้เลย)
@@ -494,7 +508,11 @@ def play_strategy_page():
              if c["gp"] == race_info["gp"] and c["year"] == race_info["year"] and c["driver"] == "VER"),
             None
         )
-        real_total = race_stats["real_total"] if race_stats else race_info["laps"] * 95.0
+        real_total = (
+            race_stats["real_total"]
+            if race_stats
+            else _forecast_reference_total(total_laps, race_info["gp"])
+        )
 
         # คำนวณ global_offset = (เวลาจริง VER - เวลา raw sim VER) / total_laps
         # ทำให้ VER sim ตรงกับเวลาจริง แล้วคนอื่นก็จะเลื่อนตามไปด้วย
@@ -503,16 +521,23 @@ def play_strategy_page():
             model, feature_cols, total_laps,
             "MEDIUM", "SOFT", int(total_laps * 0.44),
             pace_offset=0.0,
+            driver_code="VER", gp_label=race_info["gp"],
+            race_year=race_info["year"],
         )
         global_offset = (real_total - ver_sim_raw) / total_laps
 
-        all_results = simulate_full_race("model.pkl", total_laps,
-                                         global_offset=global_offset)
+        all_results = simulate_full_race(
+            "model.pkl", total_laps, global_offset=global_offset,
+            gp_label=race_info["gp"], race_year=race_info["year"],
+        )
 
         user_strategy = DriverStrategy(code="YOU", first_compound=start_compound,
                                        second_compound=second_compound, pit_lap=pit_lap,
                                        pace_offset=1.5 + global_offset)
-        user_result = simulate_driver(predictor, user_strategy, total_laps)
+        user_result = simulate_driver(
+            predictor, user_strategy, total_laps,
+            gp_label=race_info["gp"], race_year=race_info["year"],
+        )
 
         combined = list(all_results) + [user_result]
         combined.sort(key=lambda r: r.total_time)
@@ -561,7 +586,7 @@ def play_strategy_page():
 @app.route("/forecast", methods=["GET", "POST"])
 def forecast_page():
     available_races = _available_future_races()
-    completed_validation = _completed_race_validation()
+    completed_validation = _completed_race_validation() if request.method == "POST" else []
     default_key = _default_future_race_key()
     selected_race_key = request.form.get("race_key") or request.args.get("race_key") or default_key
     if selected_race_key not in available_races:
@@ -573,6 +598,20 @@ def forecast_page():
     leaderboard = []
     error_msg = None
 
+    if request.method == "GET":
+        return render_template(
+            "forecast.html",
+            available_races=available_races,
+            completed_validation=completed_validation,
+            selected_race_key=selected_race_key,
+            race_label=race_info["label"],
+            result=result,
+            leaderboard=leaderboard,
+            error=error_msg,
+            mode_label="Future Standings",
+            page_date=date.today().isoformat(),
+        )
+
     try:
         # ใช้ baseline จาก date ปัจจุบัน (เดา future race) ไม่ใช่จากผล race จริงเก่า
         race_stats = next(
@@ -580,17 +619,52 @@ def forecast_page():
              if c["gp"] == race_info["gp"] and c["year"] == race_info["year"] and c["driver"] == "VER"),
             None
         )
-        real_total = race_stats["real_total"] if race_stats else race_info["laps"] * 95.0
+        real_total = (
+            race_stats["real_total"]
+            if race_stats
+            else _forecast_reference_total(total_laps, race_info["gp"])
+        )
 
         from strategy_optimizer import simulate_strategy
         ver_sim_raw = simulate_strategy(
             model, feature_cols, total_laps,
             "MEDIUM", "SOFT", int(total_laps * 0.44),
             pace_offset=0.0,
+            driver_code="VER", gp_label=race_info["gp"],
+            race_year=race_info["year"],
         )
         global_offset = (real_total - ver_sim_raw) / total_laps
 
-        all_results = simulate_full_race("model.pkl", total_laps, global_offset=global_offset)
+        forecast_lap_times = [real_total / total_laps] * total_laps
+        strategies = []
+        for code in DEFAULT_STRATEGIES:
+            candidates = grid_search_strategies(
+                model, feature_cols, forecast_lap_times, total_laps,
+                driver_code=code, gp_label=race_info["gp"],
+                race_year=race_info["year"],
+            )
+            one_stop = [item for item in candidates if item["num_stops"] == 1]
+            best = one_stop[0]
+            strategies.append(DriverStrategy(
+                code=code,
+                first_compound=best["first_compound"],
+                second_compound=best["second_compound"],
+                pit_lap=best["pit_lap"],
+                pace_offset=DRIVER_PACE.get(code, 1.5) + global_offset,
+            ))
+
+        predictor = LapPredictor("model.pkl")
+        all_results = [
+            simulate_driver(
+                predictor, strategy, total_laps,
+                gp_label=race_info["gp"], race_year=race_info["year"],
+                random_seed=42 + index,
+            )
+            for index, strategy in enumerate(strategies)
+        ]
+        all_results.sort(key=lambda item: item.total_time)
+        for index, item in enumerate(all_results, start=1):
+            item.rank = index
         win_probs = compute_win_probabilities(all_results)
         p1_time = all_results[0].total_time if all_results else 0.0
 
