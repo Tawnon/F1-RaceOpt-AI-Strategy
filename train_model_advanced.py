@@ -10,7 +10,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-from data_pipeline import load_multi_race_laps, AVAILABLE_RACES, AVAILABLE_DRIVERS
+from data_pipeline import load_multi_race_laps
 
 
 # ============================================================
@@ -18,17 +18,17 @@ from data_pipeline import load_multi_race_laps, AVAILABLE_RACES, AVAILABLE_DRIVE
 # เพิ่ม/ลดได้เลย (ยิ่งมาก = โมเดลแม่นยำขึ้น แต่ใช้เวลาโหลดนานขึ้น)
 # ============================================================
 TRAIN_COMBINATIONS = [
-    # (year, gp, driver)
-    (2023, "Bahrain", "VER"),
-    (2023, "Bahrain", "HAM"),
-    (2023, "Bahrain", "LEC"),
-    (2023, "Bahrain", "ALO"),
-    (2023, "Saudi Arabia", "VER"),
-    (2023, "Saudi Arabia", "PER"),
-    (2023, "Australia", "VER"),
-    (2023, "Australia", "HAM"),
-    (2022, "Bahrain", "LEC"),
-    (2022, "Bahrain", "VER"),
+    # (year, gp round number, driver) — ฤดูกาลล่าสุดที่แข่งจบแล้ว (2025)
+    (2025, 1, "VER"),   # Australian GP
+    (2025, 1, "NOR"),
+    (2025, 4, "VER"),   # Bahrain GP
+    (2025, 4, "HAM"),
+    (2025, 5, "VER"),   # Saudi Arabian GP
+    (2025, 5, "LEC"),
+    (2025, 8, "NOR"),   # Monaco GP
+    (2025, 8, "LEC"),
+    (2025, 12, "VER"),  # British GP
+    (2025, 12, "RUS"),
 ]
 
 
@@ -40,14 +40,17 @@ def train_advanced_model():
 
     # แยก X, y
     y = combined_data["LapTimeSec"].values
-    # Sector times are only known after a lap finishes, so they cannot be
-    # used when forecasting a future lap.
+    # Sector times are only known after a lap finishes, so they leak the
+    # answer and can't be used when forecasting a lap that hasn't happened yet.
     X = combined_data.drop(
         columns=["LapTimeSec", "Sector1Sec", "Sector2Sec", "Sector3Sec"],
         errors="ignore",
     )
 
-    # ลบ column ที่ไม่ใช่ตัวเลข (เผื่อมีหลงเหลือ)
+    # ลบ column ที่ไม่ใช่ตัวเลข (เผื่อมีหลงเหลือ) — ต้องรวม "bool" ไว้ด้วย เพราะ
+    # pd.get_dummies() คืนคอลัมน์เป็น bool dtype (ไม่ใช่ np.number) ถ้าไม่รวมไว้
+    # คอลัมน์ one-hot ทั้งหมด (Compound_SOFT/MEDIUM/HARD, TrackStatus_1, ฯลฯ)
+    # จะหายไปเงียบๆ ตรงนี้ ทำให้โมเดลไม่เห็นชนิดยางเลย
     X = X.select_dtypes(include=[np.number, "bool"])
     X = X.astype(float)
     feature_cols = X.columns.tolist()

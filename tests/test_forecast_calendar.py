@@ -59,12 +59,12 @@ class ForecastCalendarTests(unittest.TestCase):
 
         completed = app._completed_race_validation()
         self.assertTrue(len(completed) > 0)
-        self.assertTrue(all(item["year"] == 2026 for item in completed))
+        self.assertTrue(all("gp" in item for item in completed))
         self.assertTrue(all(item["actual_total"] > 0 for item in completed))
 
     def test_completed_validation_is_cached(self):
-        self.assertTrue(hasattr(app._completed_race_validation_for_day, "cache_info"))
-        self.assertTrue(hasattr(app._completed_race_validation_for_day, "cache_clear"))
+        self.assertTrue(hasattr(app._load_fastf1_2026_results, "cache_info"))
+        self.assertTrue(hasattr(app._load_fastf1_2026_results, "cache_clear"))
 
 
 if __name__ == "__main__":

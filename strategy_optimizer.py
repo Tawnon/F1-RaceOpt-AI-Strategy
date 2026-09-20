@@ -3,12 +3,11 @@
 Grid Search กลยุทธ์ที่ดีกว่าของจริง และอธิบายว่า parameter ไหนทำให้เร็วขึ้น
 """
 
-import numpy as np
 import pandas as pd
 from itertools import product
 
 
-PIT_LOSS = 22.0  # วินาทีที่เสียตอนเข้าพิท
+PIT_LOSS = 22.0  # ค่า fallback ถ้ายังไม่มี lap cache ให้ประมาณ pit loss จริงของสนามนั้น
 
 
 def _compound_one_hot(comp: str) -> dict:
@@ -20,27 +19,29 @@ def _compound_one_hot(comp: str) -> dict:
     }
 
 
-def simulate_strategy(
-    model,
+def build_strategy_laps(
     feature_cols: list,
     total_laps: int,
     first_compound: str,
     second_compound: str,
     pit_lap: int,
-    pace_offset: float = 0.0,
     num_stops: int = 1,
     second_pit_lap: int = None,
     third_compound: str = None,
-    driver_code: str = None,
-    gp_label: str = None,
     race_year: int = None,
-) -> float:
+    pit_loss: float = PIT_LOSS,
+    grid_position: int = 1,
+) -> tuple:
     """
-    จำลอง race time สำหรับกลยุทธ์หนึ่งๆ
-    รองรับ 1-stop และ 2-stop
+    สร้าง feature ของทุก lap ในกลยุทธ์หนึ่งๆ เป็น list เดียว
+    คืนค่า (rows, pit_penalties) เพื่อให้ผู้เรียกเอาไป predict แบบ batch ได้
+
+    แยกออกมาจาก simulate_strategy เพื่อให้หลายกลยุทธ์รวม predict ครั้งเดียวได้
+    การเรียก model.predict() ทีละแถวมี overhead ~48 ms ต่อครั้ง ขณะที่
+    การส่ง 1,000+ แถวไปในครั้งเดียวใช้เวลาเกือบเท่ากัน
     """
     rows = []
-    lap_penalties = []
+    pit_penalties = []
     stint = 1
     pit_stops = 0
     compound = first_compound.upper()
@@ -54,13 +55,13 @@ def simulate_strategy(
             stint = 2
             compound = second_compound.upper()
             tyre_life = 1
-            pit_penalty = PIT_LOSS
+            pit_penalty = pit_loss
         elif num_stops == 2 and second_pit_lap and lap == second_pit_lap:
             pit_stops += 1
             stint = 3
             compound = (third_compound or "HARD").upper()
             tyre_life = 1
-            pit_penalty = PIT_LOSS
+            pit_penalty = pit_loss
         else:
             if stint == 1:
                 tyre_life = lap
@@ -82,114 +83,58 @@ def simulate_strategy(
             "IsInLap":       1 if pit_penalty > 0 else 0,
             "IsOutLap":      0,
             "TrackStatus_1": 1,
-            "Position":      1,
+            "Position":      grid_position,
         })
+        if race_year is not None:
+            feat["RaceYear"] = race_year
         feat.update(_compound_one_hot(compound))
 
-        if driver_code:
-            driver_key = f"DriverCode_{driver_code}"
-            if driver_key in feat:
-                feat[driver_key] = 1
-        if gp_label:
-            gp_key = f"GP_Label_{gp_label}"
-            if gp_key in feat:
-                feat[gp_key] = 1
-        if race_year is not None and "RaceYear" in feat:
-            feat["RaceYear"] = race_year
+        # เก็บเฉพาะ column ที่โมเดลรู้จัก
+        rows.append({f: feat[f] for f in feature_cols})
+        pit_penalties.append(pit_penalty)
 
-        rows.append(feat)
-        lap_penalties.append(pit_penalty)
-
-    X = pd.DataFrame(rows, columns=feature_cols)
-    predicted_laps = model.predict(X)
-    total_time = sum(
-        float(lap_time) + pace_offset + pit_penalty
-        for lap_time, pit_penalty in zip(predicted_laps, lap_penalties)
-    )
-
-    return total_time
+    return rows, pit_penalties
 
 
-def _simulate_strategy_batch(
+def _predict_totals(model, feature_cols, rows, penalties_per_strategy, total_laps, pace_offset):
+    """
+    predict ทุกแถวของทุกกลยุทธ์ในครั้งเดียว แล้วหั่นผลกลับเป็นเวลารวมต่อกลยุทธ์
+    pace_offset ถูกบวกเป็นค่าคงที่ต่อ lap จึงคูณ total_laps ได้เลย
+    """
+    preds = model.predict(pd.DataFrame(rows, columns=feature_cols))
+    totals = []
+    for i, penalties in enumerate(penalties_per_strategy):
+        seg = preds[i * total_laps:(i + 1) * total_laps]
+        totals.append(float(seg.sum() + sum(penalties) + pace_offset * total_laps))
+    return totals
+
+
+def simulate_strategy(
     model,
     feature_cols: list,
     total_laps: int,
-    strategies: list,
+    first_compound: str,
+    second_compound: str,
+    pit_lap: int,
     pace_offset: float = 0.0,
-    driver_code: str = None,
-    gp_label: str = None,
+    num_stops: int = 1,
+    second_pit_lap: int = None,
+    third_compound: str = None,
     race_year: int = None,
-) -> list:
-    rows = []
-    segments = []
-
-    for first_compound, second_compound, pit_lap, num_stops, second_pit_lap, third_compound in strategies:
-        stint = 1
-        pit_stops = 0
-        compound = first_compound.upper()
-        strategy_rows = []
-        lap_penalties = []
-
-        for lap in range(1, total_laps + 1):
-            pit_penalty = 0.0
-            if lap == pit_lap:
-                pit_stops += 1
-                stint = 2
-                compound = second_compound.upper()
-                tyre_life = 1
-                pit_penalty = PIT_LOSS
-            elif num_stops == 2 and second_pit_lap and lap == second_pit_lap:
-                pit_stops += 1
-                stint = 3
-                compound = (third_compound or "HARD").upper()
-                tyre_life = 1
-                pit_penalty = PIT_LOSS
-            elif stint == 1:
-                tyre_life = lap
-            elif stint == 2:
-                tyre_life = lap - pit_lap + 1
-            else:
-                tyre_life = lap - second_pit_lap + 1
-
-            feat = {f: 0.0 for f in feature_cols}
-            feat.update({
-                "LapNumber": lap,
-                "TyreLife": tyre_life,
-                "FuelEst": (total_laps - lap) / total_laps,
-                "StintNumber": stint,
-                "StintLap": tyre_life,
-                "PitStopsSoFar": pit_stops,
-                "IsInLap": 1 if pit_penalty > 0 else 0,
-                "IsOutLap": 0,
-                "TrackStatus_1": 1,
-                "Position": 1,
-            })
-            feat.update(_compound_one_hot(compound))
-            if driver_code and f"DriverCode_{driver_code}" in feat:
-                feat[f"DriverCode_{driver_code}"] = 1
-            if gp_label and f"GP_Label_{gp_label}" in feat:
-                feat[f"GP_Label_{gp_label}"] = 1
-            if race_year is not None and "RaceYear" in feat:
-                feat["RaceYear"] = race_year
-            strategy_rows.append(feat)
-            lap_penalties.append(pit_penalty)
-
-        rows.extend(strategy_rows)
-        segments.append(lap_penalties)
-
-    predicted_laps = model.predict(pd.DataFrame(rows, columns=feature_cols))
-    results = []
-    offset = 0
-    for lap_penalties in segments:
-        lap_count = len(lap_penalties)
-        results.append(sum(
-            float(lap_time) + pace_offset + pit_penalty
-            for lap_time, pit_penalty in zip(
-                predicted_laps[offset:offset + lap_count], lap_penalties
-            )
-        ))
-        offset += lap_count
-    return results
+    pit_loss: float = PIT_LOSS,
+    grid_position: int = 1,
+) -> float:
+    """
+    จำลอง race time สำหรับกลยุทธ์หนึ่งๆ
+    รองรับ 1-stop และ 2-stop
+    """
+    rows, penalties = build_strategy_laps(
+        feature_cols, total_laps, first_compound, second_compound, pit_lap,
+        num_stops=num_stops, second_pit_lap=second_pit_lap,
+        third_compound=third_compound, race_year=race_year,
+        pit_loss=pit_loss, grid_position=grid_position,
+    )
+    return _predict_totals(model, feature_cols, rows, [penalties], total_laps, pace_offset)[0]
 
 
 def calibrate_pace_offset(
@@ -199,30 +144,37 @@ def calibrate_pace_offset(
     actual_data: pd.DataFrame,
     total_laps: int,
     baseline_strategy: dict,
+    race_year: int = None,
+    pit_loss: float = PIT_LOSS,
+    grid_position: int = 1,
 ) -> float:
     """
-    หา pace_offset ที่ทำให้เวลาจำลองใกล้เคียงเวลาจริงมากที่สุด
-    ค้นหาแบบ binary search ในช่วง [-5, +5] วินาที/lap
+    หา pace_offset ที่ทำให้เวลาจำลองตรงกับเวลาจริง
+
+    pace_offset ถูกบวกเป็นค่าคงที่ต่อ lap ดังนั้น
+        sim_total(offset) = sim_total(0) + offset * total_laps
+    เป็นสมการเชิงเส้น จึงแก้ได้ตรงๆ ด้วยการจำลองรอบเดียว:
+        offset = (real_total - sim_total(0)) / total_laps
+
+    เวอร์ชันก่อนหน้าไล่ค้น 101 ค่าในช่วง [-5, +5] ซึ่งทั้งช้า (จำลอง race
+    ซ้ำ 101 รอบเพื่อหาค่าที่คำนวณตรงๆ ได้) และผิดเมื่อค่าที่ถูกต้องอยู่นอก
+    ช่วงนั้น — ผลลัพธ์จะไปติดขอบที่ +5.00 s/lap แล้วทำให้ diff หลัง
+    calibrate แย่กว่าก่อน calibrate
     """
     real_total = sum(real_lap_times)
 
-    best_offset = 0.0
-    best_diff = float("inf")
+    sim_raw = simulate_strategy(
+        model, feature_cols, total_laps,
+        baseline_strategy["first_compound"],
+        baseline_strategy["second_compound"],
+        baseline_strategy["pit_lap"],
+        pace_offset=0.0,
+        race_year=race_year,
+        pit_loss=pit_loss,
+        grid_position=grid_position,
+    )
 
-    for offset in np.arange(-5.0, 5.1, 0.1):
-        sim_total = simulate_strategy(
-            model, feature_cols, total_laps,
-            baseline_strategy["first_compound"],
-            baseline_strategy["second_compound"],
-            baseline_strategy["pit_lap"],
-            pace_offset=round(offset, 2),
-        )
-        diff = abs(sim_total - real_total)
-        if diff < best_diff:
-            best_diff = diff
-            best_offset = round(offset, 2)
-
-    return best_offset
+    return round((real_total - sim_raw) / total_laps, 4)
 
 
 def grid_search_strategies(
@@ -231,13 +183,15 @@ def grid_search_strategies(
     real_lap_times: list,
     total_laps: int,
     pace_offset: float = 0.0,
-    driver_code: str = None,
-    gp_label: str = None,
     race_year: int = None,
+    pit_loss: float = PIT_LOSS,
+    grid_position: int = 1,
 ) -> list:
     """
     ลอง compound + pit_lap ทุก combination
     คืนค่าผลลัพธ์ทุก combo เรียงจากเร็วสุด
+
+    ทุกกลยุทธ์ถูกรวมเป็น DataFrame เดียวแล้ว predict ครั้งเดียว
     """
     real_total = sum(real_lap_times)
 
@@ -249,33 +203,20 @@ def grid_search_strategies(
         2,  # step 2 laps เพื่อประหยัดเวลา
     ))
 
-    results = []
+    # ── รวบรวมกลยุทธ์ที่จะลองทั้งหมดก่อน ──────────────
+    specs = []
 
     # 1-stop
-    one_stop_specs = [
-        (c1, c2, pit, 1, None, None)
-        for c1, c2, pit in product(compounds, compounds, pit_laps)
-        if c1 != c2
-    ]
-    one_stop_times = _simulate_strategy_batch(
-        model, feature_cols, total_laps, one_stop_specs,
-        pace_offset=pace_offset, driver_code=driver_code,
-        gp_label=gp_label, race_year=race_year,
-    )
-    for (c1, c2, pit, _, _, _), sim in zip(one_stop_specs, one_stop_times):
-        delta = sim - real_total
-        results.append({
+    for c1, c2, pit in product(compounds, compounds, pit_laps):
+        if c1 == c2:
+            continue
+        specs.append({
             "num_stops":       1,
             "first_compound":  c1,
             "second_compound": c2,
             "third_compound":  None,
             "pit_lap":         pit,
             "second_pit_lap":  None,
-            "sim_total":       sim,
-            "real_total":      real_total,
-            "delta_sec":       delta,
-            "delta_pct":       delta / real_total * 100,
-            "faster":          delta < 0,
         })
 
     # 2-stop (เฉพาะ combo ที่น่าสนใจ)
@@ -288,30 +229,49 @@ def grid_search_strategies(
     pit1_options = [int(total_laps * 0.25), int(total_laps * 0.30)]
     pit2_options = [int(total_laps * 0.55), int(total_laps * 0.60)]
 
-    two_stop_specs = [
-        (c1, c2, p1, 2, p2, c3)
-        for (c1, c2, c3), p1, p2 in product(two_stop_combos, pit1_options, pit2_options)
-        if p1 < p2
-    ]
-    two_stop_times = _simulate_strategy_batch(
-        model, feature_cols, total_laps, two_stop_specs,
-        pace_offset=pace_offset, driver_code=driver_code,
-        gp_label=gp_label, race_year=race_year,
-    )
-    for (c1, c2, p1, _, p2, c3), sim in zip(two_stop_specs, two_stop_times):
-        delta = sim - real_total
-        results.append({
+    for (c1, c2, c3), p1, p2 in product(two_stop_combos, pit1_options, pit2_options):
+        if p1 >= p2:
+            continue
+        specs.append({
             "num_stops":       2,
             "first_compound":  c1,
             "second_compound": c2,
             "third_compound":  c3,
             "pit_lap":         p1,
             "second_pit_lap":  p2,
-            "sim_total":       sim,
-            "real_total":      real_total,
-            "delta_sec":       delta,
-            "delta_pct":       delta / real_total * 100,
-            "faster":          delta < 0,
+        })
+
+    # ── สร้าง feature ของทุกกลยุทธ์ แล้ว predict รอบเดียว ──
+    all_rows = []
+    all_penalties = []
+    for s in specs:
+        rows, penalties = build_strategy_laps(
+            feature_cols, total_laps,
+            s["first_compound"], s["second_compound"], s["pit_lap"],
+            num_stops=s["num_stops"],
+            second_pit_lap=s["second_pit_lap"],
+            third_compound=s["third_compound"],
+            race_year=race_year,
+            pit_loss=pit_loss,
+            grid_position=grid_position,
+        )
+        all_rows.extend(rows)
+        all_penalties.append(penalties)
+
+    totals = _predict_totals(
+        model, feature_cols, all_rows, all_penalties, total_laps, pace_offset
+    )
+
+    results = []
+    for s, sim in zip(specs, totals):
+        delta = sim - real_total
+        results.append({
+            **s,
+            "sim_total":  sim,
+            "real_total": real_total,
+            "delta_sec":  delta,
+            "delta_pct":  delta / real_total * 100,
+            "faster":     delta < 0,
         })
 
     results.sort(key=lambda r: r["sim_total"])
@@ -377,6 +337,27 @@ def explain_parameters(best: dict, baseline: dict, real_total: float) -> list:
         })
 
     return explanations
+
+
+def classify_pit_tactics(results: list, baseline: dict, top_n: int = 6) -> list:
+    """
+    จัดกลุ่มกลยุทธ์ที่เร็วกว่า baseline ตาม tactic การเข้าพิท
+    Undercut = เข้าพิทเร็วกว่ารอบ baseline (ยึด track position ด้วยยางใหม่ก่อนคู่แข่ง)
+    Overcut  = เข้าพิทช้ากว่ารอบ baseline (ใช้ยางเก่า push ต่อ แล้วออกมาเจอแทร็กโล่ง)
+    ใช้ผลลัพธ์ชุดเดียวกับที่ grid_search_strategies คำนวณไว้แล้ว ไม่จำลองซ้ำ
+    """
+    base_pit = baseline.get("pit_lap")
+    out = []
+    for r in results[:top_n]:
+        pit_diff = r["pit_lap"] - base_pit if base_pit is not None else 0
+        if pit_diff < 0:
+            tactic = "Undercut"
+        elif pit_diff > 0:
+            tactic = "Overcut"
+        else:
+            tactic = "Same window"
+        out.append({**r, "tactic": tactic, "pit_diff": pit_diff})
+    return out
 
 
 def _compound_reason(from_c, to_c, position):

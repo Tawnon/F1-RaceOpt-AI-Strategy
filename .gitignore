@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# FastF1 / data cache (regenerated automatically on first run)
+cache/
+colab/cache/
+colab/catboost_info/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

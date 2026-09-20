@@ -1,187 +1,163 @@
 {% extends "base.html" %}
-{% block title %}Future Standings · F1 AI Strategy{% endblock %}
+{% block title %}Future Standings · RaceOpt{% endblock %}
+
+{%- macro cmp(c) -%}
+  {%- set u = (c or '')|upper -%}
+  {%- if u -%}
+  <span class="cmp cmp-{{ u|lower }}" title="{{ u }}"><span aria-hidden="true">{{ u[:1] }}</span><span class="sr-only">{{ u }}</span></span>
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- macro seq(c1, c2) -%}
+<span class="seq">{{ cmp(c1) }}<span class="seq-arrow" aria-hidden="true">›</span>{{ cmp(c2) }}</span>
+{%- endmacro -%}
 
 {% block content %}
-<header class="flex flex-col gap-1">
-  <p class="text-xs uppercase tracking-[0.2em] text-sky-400 font-medium">Future Race Intelligence</p>
-  <h1 class="text-3xl font-bold tracking-tight">Future Standings Forecast</h1>
-  <p class="text-sm text-slate-400 max-w-2xl">
-    เริ่มต้นด้วยการเลือกสนามที่ยังไม่ได้แข่ง เพื่อทำการคาดเดาอันดับแมตในอนาคต
-    ระบบจะใช้โมเดลจำลองอัตราเร็วรอบและจัดลำดับผู้เข้าเส้นชัยแบบสรุปภาพรวม
-    โดยใช้เฉพาะ parameter ภายนอกที่สามารถทราบก่อนแข่งจริง เช่น สถานะสนาม, compound, lap profile, pit timing
-    และไม่ใช้ผลการแข่งขันจริงของสนามนั้นเป็น input ในการ train
+
+<header class="page-head">
+  <p class="eyebrow">06 / Season forecast</p>
+  <h1 class="page-title">คาดเดาอันดับสนามที่ยังไม่ได้แข่ง</h1>
+  <p class="lede">
+    เลือกสนามในปฏิทิน 2026 ที่ยังไม่ได้แข่ง ให้โมเดลหากลยุทธ์ยางที่ดีที่สุดของสนามนั้น แล้วจัดอันดับ
+    ทั้งกริดจากฟอร์มจริงของแต่ละนักแข่งในฤดูกาลนี้ (ไม่ใช่ตารางค่าคงที่)
   </p>
-  <p class="text-xs text-sky-300 mt-2">
-    Training algorithm: RandomForestRegressor (n_estimators=500, max_depth=16, min_samples_split=3, min_samples_leaf=2, random_state=42)
-    trained on historical FastF1 lap data.
-  </p>
-  <div class="mt-3 flex flex-wrap gap-2">
-    <span class="inline-flex items-center rounded-full border border-sky-500/50 px-3 py-1 text-[11px] font-semibold text-sky-300">
-      System Date: {{ page_date or result.system_date }}
-    </span>
-    <span class="inline-flex items-center rounded-full border border-emerald-500/50 px-3 py-1 text-[11px] font-semibold text-emerald-300">
-      Next Race: {{ selected_race_key }}
-    </span>
-  </div>
 </header>
 
-<section class="bg-slate-900 rounded-2xl p-5 border border-slate-800 shadow">
-  <div class="flex items-center justify-between gap-3 mb-4">
-    <div>
-      <p class="text-[11px] uppercase tracking-[0.2em] text-violet-300">2026 · Race ที่แข่งไปแล้ว</p>
-      <h2 class="text-lg font-bold text-slate-100 mt-1">Model Validation Snapshot</h2>
+<section aria-labelledby="sel-h">
+  <div class="panel">
+    <div class="panel-head">
+      <h2 class="panel-title" id="sel-h">เลือกสนาม</h2>
+      <span class="panel-note push">{{ available_races|length }} สนามที่ยังไม่ได้แข่ง</span>
     </div>
-    <span class="text-xs text-slate-400">{{ completed_validation|length }} races</span>
-  </div>
-
-  {% if completed_validation %}
-  <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-    {% for row in completed_validation %}
-    <div class="rounded-2xl border border-slate-700 bg-slate-950/50 p-3">
-      <p class="text-sm font-semibold text-slate-100">{{ row.gp }} {{ row.year }}</p>
-      <p class="text-[11px] text-slate-400 mt-1">Actual Winner: <span class="text-slate-200 font-medium">{{ row.winner or row.driver }}</span></p>
-      <div class="mt-3 space-y-2 text-xs">
-        <div class="flex items-center justify-between gap-3">
-          <span class="text-slate-400">Official Time</span>
-          <span class="font-mono text-emerald-300">{{ row.actual_time }}</span>
+    <div class="panel-body">
+      <form method="post" class="form-row">
+        <div class="field">
+          <label for="race_key">สนามแข่ง</label>
+          <select name="race_key" id="race_key">
+            {% for key, info in available_races.items() %}
+            <option value="{{ key }}" {% if key == selected_race_key %}selected{% endif %}>
+              {{ info.label }} · {{ info.laps }} laps · {{ info.race_date }}
+            </option>
+            {% endfor %}
+          </select>
         </div>
-        <div class="flex items-center justify-between gap-3">
-          <span class="text-slate-400">Model Winner</span>
-          <span class="font-mono text-sky-300">{{ row.predicted_winner or '—' }}</span>
+        <div class="field">
+          <button type="submit" class="btn block">
+            คาดเดาอันดับ
+            <svg class="btn-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </button>
         </div>
-        <div class="flex items-center justify-between gap-3">
-          <span class="text-slate-400">Model Time</span>
-          <span class="font-mono text-sky-300">{{ row.predicted_time_str or row.simulated_time }}</span>
-        </div>
-        <div class="flex items-center justify-between gap-3">
-          <span class="text-slate-400">Diff</span>
-          <span class="font-mono {% if row.diff_pct >= 0 %}text-amber-300{% else %}text-emerald-300{% endif %}">
-            {{ "%.2f"|format(row.diff_pct) }}%
-          </span>
-        </div>
-      </div>
+      </form>
     </div>
-    {% endfor %}
+    <div class="panel-foot">โมเดลไม่รู้ผลจริงของสนามนี้ล่วงหน้า — ใช้แค่ปฏิทิน, กลยุทธ์ยาง, และฟอร์มจริงของนักแข่งจากสนามที่แข่งจบไปแล้วในฤดูกาลนี้</div>
   </div>
-  {% else %}
-  <div class="rounded-2xl border border-slate-700 bg-slate-950/50 p-4 text-sm text-slate-300">
-    ยังไม่มี race 2026 ที่มีผลการแข่งขันจริงถูกโหลดจาก FastF1 ในระบบตอนนี้
-  </div>
-  {% endif %}
-</section>
-
-<section class="bg-slate-900 rounded-2xl p-5 border border-slate-800 shadow">
-  <div class="flex items-center justify-between gap-3 mb-4">
-    <div>
-      <p class="text-[11px] uppercase tracking-[0.2em] text-sky-300">Race ที่ยังไม่ได้แข่ง</p>
-      <h2 class="text-lg font-bold text-slate-100 mt-1">Future Standings Forecast</h2>
-    </div>
-    <span class="text-xs text-slate-400">{{ available_races|length }} upcoming races</span>
-  </div>
-
-  <form method="post" class="flex flex-col sm:flex-row gap-4 items-end">
-    <div class="flex-1">
-      <label class="block text-xs text-slate-400 mb-1 uppercase tracking-wide">เลือก Race</label>
-      <select name="race_key"
-        class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-sky-500 transition">
-        {% for key, info in available_races.items() %}
-        <option value="{{ key }}" {% if key == selected_race_key %}selected{% endif %}>{{ info.label }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <button type="submit"
-      class="px-6 py-2 bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold rounded-xl text-sm transition whitespace-nowrap">
-      คาดเดาอันดับ →
-    </button>
-  </form>
 </section>
 
 {% if error %}
-<div class="bg-red-900/40 border border-red-700 rounded-2xl p-4 text-sm text-red-300">
-  <span class="font-semibold">เกิดข้อผิดพลาด:</span> {{ error }}
+<div class="notice notice-bad" role="alert">
+  <p class="notice-title">คาดเดาไม่สำเร็จ</p>
+  <p>{{ error }}</p>
 </div>
 {% endif %}
 
 {% if result %}
-<section class="space-y-4">
-  <div class="grid gap-4 sm:grid-cols-3">
-    <div class="bg-slate-900 rounded-2xl p-4 border border-sky-500/40">
-      <p class="text-xs text-slate-400">สนาม</p>
-      <p class="text-2xl font-bold text-sky-300 mt-1">{{ result.race_label }}</p>
-      <p class="text-[11px] text-slate-500 mt-1">{{ result.year }} · {{ result.race_name }}</p>
-      <p class="text-[11px] text-slate-500 mt-2">Race Date: {{ result.race_date }}</p>
-      <p class="text-[11px] text-slate-500">Circuit: {{ result.circuit }}</p>
-    </div>
-    <div class="bg-slate-900 rounded-2xl p-4 border border-emerald-500/40">
-      <p class="text-xs text-slate-400">รอบการแข่งขัน</p>
-      <p class="text-2xl font-bold text-emerald-300 mt-1 font-mono">{{ result.total_laps }}</p>
-      <p class="text-[11px] text-slate-500 mt-1">Projected laps</p>
-      <p class="text-[11px] text-slate-500 mt-2">Round {{ result.round }}</p>
-    </div>
-    <div class="bg-slate-900 rounded-2xl p-4 border border-fuchsia-500/40">
-      <p class="text-xs text-slate-400">อันดับ 1 เส้นชัย</p>
-      <p class="text-2xl font-bold text-fuchsia-300 mt-1 font-mono">{{ result.p1_time }}</p>
-      <p class="text-[11px] text-slate-500 mt-1">{{ "%.1f"|format(result.p1_time_seconds) }} s</p>
-      <p class="text-[11px] text-slate-500 mt-2">Forecasted from: {{ result.system_date }}</p>
-    </div>
+
+<section aria-labelledby="res-h">
+  <div class="specbar">
+    <div class="spec"><span class="spec-k">สนาม</span><span class="spec-v">{{ result.race_label }}</span></div>
+    <div class="spec"><span class="spec-k">Circuit</span><span class="spec-v">{{ result.circuit }}</span></div>
+    <div class="spec"><span class="spec-k">Round</span><span class="spec-v">{{ result.round }}</span></div>
+    <div class="spec"><span class="spec-k">Race date</span><span class="spec-v">{{ result.race_date }}</span></div>
+    <div class="spec"><span class="spec-k">Distance</span><span class="spec-v">{{ result.total_laps }} laps</span></div>
+    <div class="spec"><span class="spec-k">P1 time (คาดเดา)</span><span class="spec-v">{{ result.p1_time }}</span></div>
+  </div>
+</section>
+
+<div class="notice {% if result.driver_pace_races_used == 0 %}notice-warn{% endif %}">
+  <p class="notice-title">{{ result.driver_pace_source }}</p>
+  <p>ยิ่งมีผลแข่งจริงของฤดูกาล 2026 มาก ฟอร์มของแต่ละนักแข่งที่ใช้คาดเดาก็ยิ่งสะท้อนความจริงมากขึ้น — ไม่ใช่ตารางที่ตายตัวเหมือนก่อน</p>
+</div>
+
+<section aria-labelledby="lb-h">
+  <div class="section-head">
+    <span class="section-no">01</span>
+    <h2 class="section-title" id="lb-h">Projected Standings</h2>
+    <span class="section-note">{{ leaderboard|length }} คัน</span>
   </div>
 
-  <section class="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden shadow">
-    <div class="px-4 pt-4 pb-2 flex items-center justify-between">
-      <div>
-        <h2 class="text-lg font-bold tracking-tight">Projected Standings</h2>
-        <p class="text-[11px] text-slate-500">AI ranking model · {{ result.model_mode }}</p>
-      </div>
-      <span class="text-xs text-slate-500">Race: {{ result.race_label }}</span>
+  <div class="panel">
+    <div class="tbl-wrap" tabindex="0" role="region" aria-label="ตารางอันดับที่คาดเดา">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th scope="col" style="width: 48px">Pos</th>
+            <th scope="col">Driver</th>
+            <th scope="col">Compound</th>
+            <th scope="col" class="t-ctr col-opt">Pit</th>
+            <th scope="col" class="t-num">Total</th>
+            <th scope="col" class="t-num">Gap</th>
+            <th scope="col" class="t-num">Win %</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in leaderboard %}
+          <tr class="race-in" style="animation-delay: {{ (loop.index0 if loop.index0 < 10 else 10) * 0.025 }}s">
+            <td class="rk {% if r.rank == 1 %}lead{% else %}fg2{% endif %}">{{ r.rank }}</td>
+            <td>
+              {% set dph = driver_photo(r.code) %}
+              <span class="avatar-row" style="font-weight: 500">{% if dph %}<img class="avatar" src="{{ url_for('static', filename=dph) }}" alt="" />{% endif %}{{ r.code }}</span>
+            </td>
+            <td>
+              {{ seq(r.start, r.second) }}
+              <span class="seq-text">{{ r.start }} › {{ r.second }}</span>
+            </td>
+            <td class="t-ctr col-opt dim">{{ r.pit_lap }}</td>
+            <td class="t-num">
+              {{ r.time_str }}
+              <span class="sub">{{ "%.1f"|format(r.total_time) }} s</span>
+            </td>
+            <td class="t-num {% if r.rank == 1 %}lead{% else %}fg2{% endif %}">
+              {% if r.rank == 1 %}—{% else %}+{{ "%.2f"|format(r.gap_to_p1) }}{% endif %}
+            </td>
+            <td class="t-num {% if r.rank == 1 %}lead{% endif %}">{{ "%.1f"|format(r.win_prob_pct) }}%</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
-
-    <table class="w-full text-xs border-collapse">
-      <thead class="text-slate-400 border-b border-slate-700 bg-slate-950/60">
-        <tr>
-          <th class="py-2 px-4 text-left">Rank</th>
-          <th class="py-2 px-4 text-left">Driver</th>
-          <th class="py-2 px-4 text-left">Strategy</th>
-          <th class="py-2 px-4 text-center">Pit Lap</th>
-          <th class="py-2 px-4 text-right">Projected Time</th>
-          <th class="py-2 px-4 text-right">Win Prob</th>
-          <th class="py-2 px-4 text-right">Gap P1</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in leaderboard %}
-        <tr class="border-b border-slate-800 hover:bg-slate-800/30 transition">
-          <td class="py-2 px-4 font-bold
-            {% if row.rank == 1 %}text-amber-300
-            {% elif row.rank <= 3 %}text-emerald-300
-            {% else %}text-slate-300{% endif %}">{{ row.rank }}</td>
-          <td class="py-2 px-4 font-semibold text-slate-100 font-mono">{{ row.code }}</td>
-          <td class="py-2 px-4 text-slate-300">{{ row.strategy }}</td>
-          <td class="py-2 px-4 text-center text-slate-300 font-mono">{{ row.pit_lap }}</td>
-          <td class="py-2 px-4 text-right font-mono text-sky-300">
-            {{ row.time_str }}
-            <span class="text-slate-500 text-[10px] block">{{ "%.1f"|format(row.total_time) }} s</span>
-          </td>
-          <td class="py-2 px-4 text-right">
-            <span class="text-emerald-300 font-bold">{{ "%.1f"|format(row.win_prob_pct) }}%</span>
-          </td>
-          <td class="py-2 px-4 text-right font-mono
-            {% if row.rank == 1 %}text-emerald-300{% else %}text-slate-400{% endif %}">
-            {% if row.rank == 1 %}—{% else %}+{{ "%.2f"|format(row.gap_to_p1) }} s{% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </section>
+    <div class="panel-foot">Gap = ส่วนต่างเวลารวมจากอันดับ 1 (วินาที) · Win % ประเมินด้วย Monte Carlo จาก RMSE ของโมเดล</div>
+  </div>
 </section>
+
 {% else %}
-<div class="flex flex-col items-center justify-center py-24 text-slate-600 gap-3">
-  <svg class="w-14 h-14 opacity-25" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
-      d="M3 12h18M3 6h18M3 18h18" />
-  </svg>
-  <p class="text-sm">ยังไม่มีข้อมูลคาดเดาอันดับ</p>
-  <p class="text-xs text-slate-700">เลือกสนามด้านบนเพื่อเริ่มต้นคาดเดาอันดับแมตในอนาคต</p>
-</div>
+
+<section class="empty" aria-live="polite">
+  <p class="empty-title">ยังไม่มีข้อมูลคาดเดาอันดับ</p>
+  <p class="empty-note">เลือกสนามด้านบนแล้วกด "คาดเดาอันดับ" เพื่อเริ่มต้น</p>
+</section>
+
 {% endif %}
+
+{% if completed_validation %}
+<section aria-labelledby="hist-h">
+  <div class="section-head">
+    <span class="section-no">02</span>
+    <h2 class="section-title" id="hist-h">ผลแข่งจริง 2026 ที่จบแล้ว</h2>
+    <span class="section-note">ใช้คำนวณฟอร์มนักแข่งด้านบน</span>
+  </div>
+  <p class="section-sub">ระบบดึงผลจริงจาก FastF1 ของสนามที่จบไปแล้วล่าสุดในฤดูกาลนี้ มาคำนวณว่าใครฟอร์มดี/แย่กว่าผู้ชนะกี่วินาทีต่อรอบโดยเฉลี่ย</p>
+  <div class="card-grid">
+    {% for row in completed_validation %}
+    <div class="panel">
+      <div class="panel-body">
+        <p class="eyebrow muted">{{ row.gp }} 2026</p>
+        <p class="big" style="margin-top: 6px">{{ row.winner }}</p>
+        <p class="kv" style="margin-top: 6px">เวลารวม <b>{{ row.actual_time }}</b> · {{ row.laps }} laps</p>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
 {% endblock %}

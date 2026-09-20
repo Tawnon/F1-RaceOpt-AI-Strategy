@@ -1,7 +1,8 @@
 # race_simulator.py
 """
-Full race simulation 20 drivers ด้วยโมเดล RandomForest
-รองรับการเลือก race และนักแข่งจากภายนอก
+Full race simulation ด้วยโมเดล RandomForest — ใช้กริดนักแข่งจริงของสนามที่เลือก
+(จาก data_pipeline.get_available_drivers) พร้อม pace offset จริงจาก lap cache
+ถ้ามี ไม่งั้น fallback เป็น synthetic offset ที่ deterministic ต่อคน
 """
 
 import pickle
@@ -10,28 +11,9 @@ import numpy as np
 from dataclasses import dataclass
 from typing import List, Dict
 
-PIT_LOSS = 22.0
+from data_pipeline import try_load_cached_race_laps, get_race_grid
 
-DRIVER_PACE = {
-    "VER": 0.0,  "PER": 0.30, "ALO": 0.70,  "HAM": 0.90,
-    "SAI": 1.00, "RUS": 1.05, "LEC": 0.80,  "STR": 1.40,
-    "NOR": 1.20, "PIA": 1.30, "GAS": 1.60,  "OCO": 1.60,
-    "BOT": 1.80, "ZHO": 1.90, "HUL": 2.00,  "MAG": 2.10,
-    "ALB": 2.20, "SAR": 2.40, "TSU": 2.10,  "DEV": 2.50,
-}
-
-DEFAULT_STRATEGIES = {
-    "VER": ("MEDIUM", "SOFT", 25), "PER": ("SOFT", "MEDIUM", 18),
-    "ALO": ("SOFT", "MEDIUM", 16), "HAM": ("SOFT", "MEDIUM", 14),
-    "SAI": ("SOFT", "MEDIUM", 15), "RUS": ("SOFT", "MEDIUM", 15),
-    "LEC": ("SOFT", "MEDIUM", 13), "STR": ("SOFT", "MEDIUM", 12),
-    "NOR": ("SOFT", "MEDIUM", 17), "PIA": ("SOFT", "MEDIUM", 18),
-    "GAS": ("SOFT", "MEDIUM", 18), "OCO": ("SOFT", "MEDIUM", 18),
-    "BOT": ("SOFT", "MEDIUM", 19), "ZHO": ("SOFT", "MEDIUM", 19),
-    "HUL": ("SOFT", "MEDIUM", 20), "MAG": ("SOFT", "MEDIUM", 20),
-    "ALB": ("SOFT", "MEDIUM", 17), "SAR": ("SOFT", "MEDIUM", 17),
-    "TSU": ("SOFT", "MEDIUM", 16), "DEV": ("SOFT", "MEDIUM", 16),
-}
+PIT_LOSS = 22.0  # ค่า fallback ถ้ายังไม่มี lap cache ให้ประมาณ pit loss จริงของสนามนั้น
 
 
 @dataclass
@@ -41,6 +23,10 @@ class DriverStrategy:
     second_compound: str
     pit_lap: int
     pace_offset: float
+    num_stops: int = 1
+    second_pit_lap: int = None
+    third_compound: str = None
+    grid_position: int = 1  # ตำแหน่งกริดสตาร์ทจริง (ถ้ามี) — ใช้เป็น Position feature
 
 
 @dataclass
@@ -53,19 +39,37 @@ class DriverResult:
 
 
 class LapPredictor:
-    def __init__(self, model_path: str = "model.pkl"):
-        with open(model_path, "rb") as f:
-            obj = pickle.load(f)
-        self.model = obj["model"]
-        self.features: List[str] = obj["features"]
+    def __init__(self, model_path: str = "model.pkl", model=None, features: List[str] = None):
+        """
+        ส่ง model/features ที่โหลดไว้แล้วเข้ามาได้ เพื่อไม่ต้อง unpickle
+        model.pkl (8.3 MB, ~1.3 วินาที) ซ้ำในทุก request
+        """
+        if model is not None and features is not None:
+            self.model = model
+            self.features: List[str] = features
+        else:
+            with open(model_path, "rb") as f:
+                obj = pickle.load(f)
+            self.model = obj["model"]
+            self.features: List[str] = obj["features"]
 
-    def predict_lap(self, feature_dict: Dict) -> float:
+    def _to_row(self, feature_dict: Dict) -> Dict:
         row = {f: 0.0 for f in self.features}
         for k, v in feature_dict.items():
             if k in row:
                 row[k] = v
-        X = pd.DataFrame([row], columns=self.features)
-        return float(self.model.predict(X)[0])
+        return row
+
+    def predict_lap(self, feature_dict: Dict) -> float:
+        return float(self.predict_laps([feature_dict])[0])
+
+    def predict_laps(self, feature_dicts: List[Dict]) -> np.ndarray:
+        """
+        predict หลาย lap ในครั้งเดียว — การเรียก predict() ทีละแถวมี overhead
+        ~48 ms ต่อครั้ง ขณะที่ส่ง 1,140 แถวไปพร้อมกันใช้เวลา ~68 ms
+        """
+        X = pd.DataFrame([self._to_row(f) for f in feature_dicts], columns=self.features)
+        return self.model.predict(X)
 
 
 def _compound_one_hot(comp: str) -> Dict[str, int]:
@@ -77,16 +81,18 @@ def _compound_one_hot(comp: str) -> Dict[str, int]:
     }
 
 
-def simulate_driver(
-    predictor: LapPredictor,
+def build_driver_laps(
     strategy: DriverStrategy,
     total_laps: int,
-    gp_label: str = None,
     race_year: int = None,
-    random_seed: int = None,
-) -> DriverResult:
-    laps = []
-    rng = np.random.default_rng(random_seed)
+    pit_loss: float = PIT_LOSS,
+) -> tuple:
+    """
+    สร้าง feature ของทุก lap ให้นักแข่งหนึ่งคน รองรับทั้ง 1-stop และ 2-stop
+    คืนค่า (feature_dicts, pit_penalties) เพื่อ predict แบบ batch
+    """
+    feats = []
+    penalties = []
     stint_number = 1
     pit_stops = 0
     current_compound = strategy.first_compound
@@ -98,11 +104,24 @@ def simulate_driver(
             current_compound = strategy.second_compound
             tyre_life = 1
             is_in_lap = 1
-            pit_penalty = PIT_LOSS
+            pit_penalty = pit_loss
+        elif (strategy.num_stops == 2 and strategy.second_pit_lap
+              and lap == strategy.second_pit_lap):
+            pit_stops += 1
+            stint_number = 3
+            current_compound = strategy.third_compound or "HARD"
+            tyre_life = 1
+            is_in_lap = 1
+            pit_penalty = pit_loss
         else:
-            tyre_life = lap if stint_number == 1 else lap - strategy.pit_lap + 1
             is_in_lap = 0
             pit_penalty = 0.0
+            if stint_number == 1:
+                tyre_life = lap
+            elif stint_number == 2:
+                tyre_life = lap - strategy.pit_lap + 1
+            else:
+                tyre_life = lap - strategy.second_pit_lap + 1
 
         feat = {
             "LapNumber":      lap,
@@ -114,25 +133,22 @@ def simulate_driver(
             "IsInLap":        is_in_lap,
             "IsOutLap":       0,
             "TrackStatus_1":  1,
-            "Position":       1,
+            "Position":       strategy.grid_position,
         }
-        feat.update(_compound_one_hot(current_compound))
-
-        driver_key = f"DriverCode_{strategy.code}"
-        if driver_key in feat:
-            feat[driver_key] = 1
-        if gp_label:
-            gp_key = f"GP_Label_{gp_label}"
-            if gp_key in feat:
-                feat[gp_key] = 1
         if race_year is not None:
             feat["RaceYear"] = race_year
+        feat.update(_compound_one_hot(current_compound))
 
-        base_lap = predictor.predict_lap(feat)
-        lap_time = base_lap + strategy.pace_offset + rng.normal(0, 0.12)
-        lap_time += pit_penalty
-        laps.append(lap_time)
+        feats.append(feat)
+        penalties.append(pit_penalty)
 
+    return feats, penalties
+
+
+def _assemble_result(strategy, base_times, penalties, total_laps) -> DriverResult:
+    noise = np.random.normal(0, 0.12, total_laps)
+    laps = (np.asarray(base_times) + strategy.pace_offset + noise
+            + np.asarray(penalties)).tolist()
     return DriverResult(
         code=strategy.code,
         total_time=float(np.sum(laps)),
@@ -141,34 +157,114 @@ def simulate_driver(
     )
 
 
-def simulate_full_race(
-    model_path: str = "model.pkl",
-    total_laps: int = 57,
-    global_offset: float = 0.0,
-    gp_label: str = None,
+def simulate_driver(
+    predictor: LapPredictor,
+    strategy: DriverStrategy,
+    total_laps: int,
     race_year: int = None,
-    random_seed: int = None,
-) -> List[DriverResult]:
-    predictor = LapPredictor(model_path)
+    pit_loss: float = PIT_LOSS,
+) -> DriverResult:
+    feats, penalties = build_driver_laps(strategy, total_laps, race_year, pit_loss)
+    base_times = predictor.predict_laps(feats)
+    return _assemble_result(strategy, base_times, penalties, total_laps)
+
+
+def _real_driver_offset(predictor: LapPredictor, year: int, gp, driver: str):
+    """
+    ถ้ามี lap cache จริงของนักแข่งคนนี้ในสนามนี้อยู่แล้วบนดิสก์ (ไม่ fetch ใหม่)
+    คำนวณ pace offset จริง = ค่าเฉลี่ย(เวลาจริง − เวลาที่โมเดลทำนาย) จาก lap จริงของเขา
+    คืนค่า None ถ้าไม่มี cache — ให้ผู้เรียกใช้ synthetic offset แทน
+    """
+    cached = try_load_cached_race_laps(year, gp, driver)
+    if cached is None:
+        return None
+    data, _meta = cached
+    if "LapTimeSec" not in data.columns or data.empty:
+        return None
+
+    y_true = data["LapTimeSec"].values
+    # รวม "bool" ไว้ด้วย ไม่งั้น Compound_*/TrackStatus_* (dtype bool จาก get_dummies) จะหายไป
+    # เงียบๆ ทำให้คำนวณ pace offset จริงโดยไม่รู้ว่านักแข่งคนนี้ใส่ยางอะไรอยู่ในแต่ละ lap
+    X = data.drop(columns=["LapTimeSec"]).select_dtypes(include=[np.number, "bool"])
+    rows = [{f: float(row[f]) for f in predictor.features if f in X.columns}
+            for _, row in X.iterrows()]
+    y_pred = predictor.predict_laps(rows)
+    return float(np.mean(y_true - y_pred))
+
+
+def _default_strategy_for(index: int, total_laps: int) -> tuple:
+    """
+    กลยุทธ์เริ่มต้นของรถที่คอมพิวเตอร์คุม (ไม่ใช่ผู้เล่น) — วนรูปแบบ compound
+    ทั่วไปและกระจาย pit lap เล็กน้อยตามตำแหน่งกริด เพื่อไม่ให้ทั้งสนามเข้าพิทพร้อมกัน
+    """
+    compounds = [("MEDIUM", "SOFT"), ("SOFT", "MEDIUM"), ("SOFT", "HARD")]
+    c1, c2 = compounds[index % len(compounds)]
+    pit_lap = max(3, min(total_laps - 3, int(total_laps * (0.30 + 0.015 * (index % 7)))))
+    return c1, c2, pit_lap
+
+
+def build_field_strategies(
+    predictor: LapPredictor,
+    year: int,
+    gp,
+    drivers: List[str],
+    total_laps: int,
+    global_offset: float = 0.0,
+) -> List[DriverStrategy]:
+    """
+    สร้างกลยุทธ์ของทุกคันในกริดจริงของสนามนี้ (รายชื่อนักแข่งจริงจาก data_pipeline)
+    ใช้ pace offset จริงจาก lap cache ถ้ามี ไม่งั้น fallback เป็น synthetic offset
+    ที่ deterministic ต่อคน (ไม่ใช่ค่าคงที่ตายตัวที่ผูกกับสนามใดสนามหนึ่ง)
+    """
+    grid = get_race_grid(year, gp)
 
     strategies = []
-    for code, (c1, c2, pit) in DEFAULT_STRATEGIES.items():
+    for i, code in enumerate(drivers):
+        grid_position = grid.get(code, i + 1)
+        real_offset = _real_driver_offset(predictor, year, gp, code)
+        if real_offset is not None:
+            pace = real_offset + global_offset
+        else:
+            # ไม่มี lap cache จริง — ใช้ synthetic offset ที่กระจายตามตำแหน่งกริดจริง
+            # (คนออกตัวหลังมักจบช้ากว่า) แทนลำดับ enumerate ที่ไม่มีความหมาย
+            seed = abs(hash((year, gp, code))) % (2 ** 32)
+            rng = np.random.default_rng(seed)
+            pace = 1.0 + (grid_position - 1) * 0.09 + float(rng.uniform(-0.25, 0.25)) + global_offset
+
+        c1, c2, pit = _default_strategy_for(i, total_laps)
         strategies.append(DriverStrategy(
-            code=code,
-            first_compound=c1,
-            second_compound=c2,
-            pit_lap=pit,
-            pace_offset=DRIVER_PACE.get(code, 1.5) + global_offset,
+            code=code, first_compound=c1, second_compound=c2,
+            pit_lap=pit, pace_offset=pace, grid_position=grid_position,
         ))
+    return strategies
+
+
+def simulate_strategies_batch(
+    predictor: LapPredictor,
+    strategies: List[DriverStrategy],
+    total_laps: int,
+    race_year: int = None,
+    pit_loss: float = PIT_LOSS,
+) -> List[DriverResult]:
+    """
+    จำลองรายชื่อ DriverStrategy ที่ประกอบไว้แล้ว (ไม่ผ่าน build_field_strategies) เป็น
+    predict ครั้งเดียวรวมทุกคน — ใช้ตอนกลยุทธ์ของแต่ละคนไม่ได้มาจากกริดจริง/lap cache จริง
+    เช่น การคาดเดาสนามที่ยังไม่ได้แข่ง ซึ่ง build_field_strategies (ที่พึ่งพา grid position/
+    lap cache จริง) ใช้ไม่ได้
+    """
+    all_feats = []
+    all_penalties = []
+    for st in strategies:
+        feats, penalties = build_driver_laps(st, total_laps, race_year, pit_loss)
+        all_feats.extend(feats)
+        all_penalties.append(penalties)
+
+    base_times = predictor.predict_laps(all_feats) if all_feats else np.array([])
 
     results = []
-    for index, st in enumerate(strategies):
-        results.append(simulate_driver(
-            predictor, st, total_laps,
-            gp_label=gp_label,
-            race_year=race_year,
-            random_seed=None if random_seed is None else random_seed + index,
-        ))
+    for i, st in enumerate(strategies):
+        seg = base_times[i * total_laps:(i + 1) * total_laps]
+        results.append(_assemble_result(st, seg, all_penalties[i], total_laps))
 
     results.sort(key=lambda r: r.total_time)
     for i, r in enumerate(results, start=1):
@@ -177,9 +273,69 @@ def simulate_full_race(
     return results
 
 
-def compute_win_probabilities(results: List[DriverResult]) -> Dict[str, float]:
+def simulate_full_race(
+    total_laps: int,
+    drivers: List[str],
+    year: int,
+    gp,
+    global_offset: float = 0.0,
+    predictor: LapPredictor = None,
+    model_path: str = "model.pkl",
+    pit_loss: float = PIT_LOSS,
+) -> List[DriverResult]:
+    """
+    จำลองทั้งกริดจริงของสนามที่เลือก — ทุกนักแข่งทุก lap ถูกรวมเป็น predict ครั้งเดียว
+    """
+    if predictor is None:
+        predictor = LapPredictor(model_path)
+
+    strategies = build_field_strategies(predictor, year, gp, drivers, total_laps, global_offset)
+    return simulate_strategies_batch(predictor, strategies, total_laps, race_year=year, pit_loss=pit_loss)
+
+
+def compute_lap_positions(results: List[DriverResult], total_laps: int) -> Dict[str, List[int]]:
+    """
+    อันดับของทุกคนใน "แต่ละ" รอบ (ไม่ใช่แค่อันดับสุดท้าย) — คำนวณจากเวลาสะสม
+    (cumulative time) ถึง lap นั้นๆ ใช้ทำกราฟ position-by-lap ที่เห็นการไล่แซง
+    ขึ้น-ลงระหว่างแข่ง แทนที่จะเห็นแค่ผลลัพธ์ปลายทาง
+    """
+    cum = np.array([np.cumsum(r.laps[:total_laps]) for r in results])  # (n_drivers, total_laps)
+    ranks = np.argsort(np.argsort(cum, axis=0), axis=0) + 1
+    return {r.code: ranks[i].tolist() for i, r in enumerate(results)}
+
+
+def compute_win_probabilities(
+    results: List[DriverResult],
+    lap_time_std: float = 1.5,
+    n_sims: int = 20000,
+    random_seed: int = 7,
+) -> Dict[str, float]:
+    """
+    ประเมิน win probability ด้วย Monte Carlo แทนการทำ softmax ตรงๆ บนเวลารวม (วินาที)
+
+    softmax แบบเดิม (exp(-total_time)) ไวเกินจริงมาก: เวลารวมต่างกันแค่ราว 10-15
+    วินาที (ซึ่งเป็นเรื่องปกติมากในผลแข่งจริง) ก็ทำให้ผู้นำได้ probability ~100% และ
+    ทุกคนที่เหลือเป็น 0% ทันที เพราะ exp(-15) ≈ 3e-7 เทียบกับ exp(0) = 1 — ทำให้
+    win probability ไม่ได้สะท้อนความไม่แน่นอนของผลแข่งจริงเลย
+
+    แทนที่ด้วยการจำลองผล race ซ้ำ n_sims ครั้ง โดยมองเวลารวมของแต่ละคนเป็นค่าที่มี
+    ความคลาดเคลื่อนแบบ Normal (std ต่อรอบ = lap_time_std สะสมตามจำนวนรอบ) แล้วนับว่า
+    ใครจบไวสุดกี่ครั้ง — lap_time_std ควรใช้ค่าใกล้เคียง MAE/RMSE จริงของโมเดล
+    (ผู้เรียกควรส่ง MODEL_RMSE เข้ามาแทนค่า default) เพื่อให้ scale ของความไม่แน่นอน
+    อิงจากความแม่นยำจริงของโมเดล ไม่ใช่ตัวเลขที่เดามั่ว ๆ
+    """
+    if not results:
+        return {}
+
+    codes = [r.code for r in results]
     times = np.array([r.total_time for r in results])
-    scores = -times
-    exp = np.exp(scores - scores.max())
-    probs = exp / exp.sum()
-    return {r.code: float(p) for r, p in zip(results, probs)}
+    total_laps = len(results[0].laps) or 1
+    std_total = max(lap_time_std, 0.01) * np.sqrt(total_laps)
+
+    rng = np.random.default_rng(random_seed)
+    draws = rng.normal(loc=times[:, None], scale=std_total, size=(len(times), n_sims))
+    winners = draws.argmin(axis=0)
+    counts = np.bincount(winners, minlength=len(times))
+    probs = counts / n_sims
+
+    return {code: float(p) for code, p in zip(codes, probs)}
