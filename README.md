@@ -67,7 +67,7 @@ python -m unittest discover tests
 ## เทรนโมเดลใหม่ / รีเฟรชข้อมูลนักแข่ง
 
 ```bash
-python train_model_advanced.py    # เทรนใหม่จาก TRAIN_COMBINATIONS ในไฟล์นั้น
+python train_model_advanced.py    # เทรนใหม่จาก TRAIN_ROUNDS ในไฟล์นั้น (ดึงทั้งกริดของแต่ละรอบอัตโนมัติ)
 python fetch_media.py             # รีเฟรชรูปนักแข่ง/สนาม + ข้อมูลทีมจริง
 ```
 
@@ -75,6 +75,6 @@ python fetch_media.py             # รีเฟรชรูปนักแข�
 
 ## ข้อจำกัดที่ควรรู้
 
-- โมเดลถูกเทรนจากข้อมูลจำนวนจำกัด (ดู `TRAIN_COMBINATIONS` ใน [train_model_advanced.py](train_model_advanced.py)) การคาดเดาสนาม/นักแข่งอื่นนอกชุดเทรนจึงเป็นการประมาณค่าแบบ generalize
+- โมเดลถูกเทรนจากข้อมูลจำนวนจำกัด (ดู `TRAIN_ROUNDS` ใน [train_model_advanced.py](train_model_advanced.py)) การคาดเดาสนาม/นักแข่งอื่นนอกชุดเทรนจึงเป็นการประมาณค่าแบบ generalize
 - ปฏิทินปี 2026 ใน `/forecast` (`FORECAST_RACES` ใน [app.py](app.py)) เป็นข้อมูลสมมติสำหรับสาธิตระบบ ไม่ใช่ปฏิทินทางการ — ทุกหน้าอื่นใช้ปฏิทินจริงจาก FastF1 (`get_available_races`)
 - `/forecast` ดึงผลการแข่งจริงของสนาม 2026 ที่จบไปแล้วจาก FastF1 มาคำนวณฟอร์มของแต่ละนักแข่ง — ต้องมีอินเทอร์เน็ตในการโหลดครั้งแรกของแต่ละวัน หลังจากนั้นจะใช้ disk cache; ถ้ายังไม่มีผลแข่งจริงเลย (ต้นฤดูกาล) จะ fallback เป็นค่าประมาณฟอร์มเริ่มต้นแทน

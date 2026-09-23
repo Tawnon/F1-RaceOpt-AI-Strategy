@@ -142,17 +142,45 @@
 <section aria-labelledby="hist-h">
   <div class="section-head">
     <span class="section-no">02</span>
-    <h2 class="section-title" id="hist-h">ผลแข่งจริง 2026 ที่จบแล้ว</h2>
-    <span class="section-note">ใช้คำนวณฟอร์มนักแข่งด้านบน</span>
+    <h2 class="section-title" id="hist-h">Model Validation — สนาม 2026 ที่จบแล้ว</h2>
+    <span class="section-note">{{ completed_validation|length }} สนาม</span>
   </div>
-  <p class="section-sub">ระบบดึงผลจริงจาก FastF1 ของสนามที่จบไปแล้วล่าสุดในฤดูกาลนี้ มาคำนวณว่าใครฟอร์มดี/แย่กว่าผู้ชนะกี่วินาทีต่อรอบโดยเฉลี่ย</p>
+  <p class="section-sub">
+    เทียบสิ่งที่โมเดลจะคาดเดา (รันกลไกเดียวกับตอนกด "คาดเดาอันดับ" ด้านบนทุกขั้นตอน) กับผลจริงที่ออกมาแล้ว —
+    ยิ่ง Diff น้อย ยิ่งแปลว่าโมเดลแม่นกับสนามนั้น ผลจริงกลุ่มนี้ถูกใช้คำนวณฟอร์มนักแข่งในข้อ 01 ด้วย
+  </p>
   <div class="card-grid">
     {% for row in completed_validation %}
     <div class="panel">
+      <div class="panel-head">
+        <h3 class="panel-title">{{ row.gp }} 2026</h3>
+        <span class="panel-note push">{{ row.laps }} laps</span>
+      </div>
       <div class="panel-body">
-        <p class="eyebrow muted">{{ row.gp }} 2026</p>
-        <p class="big" style="margin-top: 6px">{{ row.winner }}</p>
-        <p class="kv" style="margin-top: 6px">เวลารวม <b>{{ row.actual_time }}</b> · {{ row.laps }} laps</p>
+        <div class="metrics cols-3">
+          <div class="metric">
+            <span class="metric-k">Actual Winner</span>
+            <span class="metric-v">{{ row.winner }}</span>
+            <span class="metric-u">{{ row.actual_time }}</span>
+          </div>
+          <div class="metric">
+            <span class="metric-k">Model Winner</span>
+            {% if row.predicted_winner %}
+            <span class="metric-v {% if row.predicted_winner == row.winner %}ok{% else %}warn{% endif %}">{{ row.predicted_winner }}</span>
+            <span class="metric-u">{{ row.predicted_time_str }}</span>
+            {% else %}
+            <span class="metric-v dim">คำนวณไม่สำเร็จ</span>
+            {% endif %}
+          </div>
+          <div class="metric">
+            <span class="metric-k">Diff (จำลอง − จริง)</span>
+            {% if row.diff_pct is not none %}
+            <span class="metric-v {% if row.diff_pct|abs < 3 %}ok{% elif row.diff_pct|abs < 8 %}warn{% else %}bad{% endif %}">{{ "%+.2f"|format(row.diff_pct) }}%</span>
+            {% else %}
+            <span class="metric-v dim">—</span>
+            {% endif %}
+          </div>
+        </div>
       </div>
     </div>
     {% endfor %}

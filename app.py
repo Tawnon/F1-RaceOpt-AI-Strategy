@@ -35,6 +35,10 @@ model        = obj["model"]
 feature_cols = obj["features"]
 MODEL_MAE    = obj.get("mae",  0.72)
 MODEL_RMSE   = obj.get("rmse", 1.53)
+# meta ต่อ combo ที่ใช้เทรนจริงทั้งหมด (บันทึกไว้ตอน train_model_advanced.py รัน) — ใช้รายงาน
+# "เทรนจากกี่ combo/lap จริง" บนหน้า About แทน COMBOS ซึ่งเป็นแค่ตัวอย่าง 18 combo ที่สุ่มมา
+# โชว์บน Model Report (ถ้าเอา COMBOS มาคำนวณ จะรายงานตัวเลขต่ำกว่าที่เทรนจริงมาก)
+TRAINED_META = obj.get("meta", [])
 
 LATEST_SEASON       = get_latest_completed_season()
 AVAILABLE_RACES     = get_available_races(LATEST_SEASON)
@@ -248,6 +252,7 @@ def _load_fastf1_2026_results(day_key: str | None = None):
 
             rows.append({
                 "gp": info["gp"],
+                "race_date": info["race_date"],
                 "winner": str(driver_name),
                 "laps": total_laps_result,
                 "actual_total": float(total_seconds),
@@ -259,19 +264,13 @@ def _load_fastf1_2026_results(day_key: str | None = None):
     return tuple(rows)
 
 
-@lru_cache(maxsize=2)
-def _driver_form_pace(day_key: str):
-    """
-    คำนวณ "pace offset" (วินาที/รอบ ที่ช้ากว่าผู้ชนะ) ของแต่ละนักแข่งจากผลการแข่งจริง
-    ของฤดูกาล 2026 ที่จบไปแล้ว (เฉลี่ยจาก MAX_VALIDATION_RACES สนามล่าสุด) — ทำให้อันดับ
-    ที่ /forecast คาดเดาสะท้อนฟอร์มจริงของแต่ละคนในฤดูกาลนี้ และเปลี่ยนไปตามผลแข่งที่ทยอย
-    ออกมา แทนที่จะได้ลำดับเดิมซ้ำทุกครั้ง (ค่าคงที่ไม่ผูกกับผลจริงเลย)
-    """
-    live_rows = _load_fastf1_2026_results(day_key)
-
+def _driver_form_pace_from_rows(rows) -> dict:
+    """คำนวณ pace offset (วินาที/รอบ ที่ช้ากว่าผู้ชนะ) เฉลี่ยของแต่ละนักแข่งจาก rows ผลแข่งจริง
+    ที่ส่งเข้ามา — แยกออกมาจาก _driver_form_pace() เพื่อให้ _completed_race_validation_for_day
+    เรียกด้วย "เฉพาะ race ที่เกิดก่อนสนามที่กำลังตรวจ" ได้ (ดู walk-forward ด้านล่าง)"""
     totals: dict = {}
     counts: dict = {}
-    for row in live_rows:
+    for row in rows:
         laps = row.get("laps") or 0
         if not laps:
             continue
@@ -284,8 +283,127 @@ def _driver_form_pace(day_key: str):
     return {code: totals[code] / counts[code] for code in totals}
 
 
+@lru_cache(maxsize=2)
+def _driver_form_pace(day_key: str):
+    """
+    คำนวณ "pace offset" ของแต่ละนักแข่งจากผลการแข่งจริงของฤดูกาล 2026 ที่จบไปแล้วทั้งหมด
+    (เฉลี่ยจาก MAX_VALIDATION_RACES สนามล่าสุด) — ทำให้อันดับที่ /forecast คาดเดาสะท้อน
+    ฟอร์มจริงของแต่ละคนในฤดูกาลนี้ ณ วันนี้ และเปลี่ยนไปตามผลแข่งที่ทยอยออกมา แทนที่จะได้
+    ลำดับเดิมซ้ำทุกครั้ง (ค่าคงที่ไม่ผูกกับผลจริงเลย) — ใช้ "วันนี้" เป็นเส้นตัดเพราะสนามที่
+    ยังไม่ได้แข่งจริง (สิ่งที่ /forecast ทำนาย) ควรได้ข้อมูลฟอร์มล่าสุดเท่าที่มีทั้งหมด
+    """
+    return _driver_form_pace_from_rows(_load_fastf1_2026_results(day_key))
+
+
+def _predict_grid_results(total_laps: int, race_year: int, real_total: float, driver_pace: dict = None):
+    """
+    รันการคาดเดาทั้งกริดหนึ่งครั้ง (หากลยุทธ์ยาง/รอบพิทที่ดีที่สุดครั้งเดียว + จำลองทุกคน
+    พร้อมกัน) — ใช้ร่วมกันทั้งตอนกด "คาดเดาอันดับ" ของสนามอนาคตใน forecast_page() และตอน
+    เช็คว่าโมเดลจะทายสนามที่ "จบไปแล้ว" ถูกแค่ไหน (_completed_race_validation_for_day)
+
+    driver_pace: ถ้าไม่ส่งมา จะใช้ฟอร์มล่าสุด ณ วันนี้ (ถูกต้องสำหรับสนามอนาคตจริง) — ตอน
+    backtest สนามที่จบไปแล้ว ต้องส่ง driver_pace ที่คำนวณจาก "เฉพาะสนามที่เกิดก่อนสนามนั้น"
+    เข้ามาแทน ไม่งั้นฟอร์มที่ใช้จะรวมผลของสนามหลังจากนั้นด้วย (มองไปข้างหน้า/look-ahead)
+    ทำให้ diff % ดูแม่นเกินจริง และทำนายเป็นคนเดิมซ้ำทุกสนามที่ backtest
+    """
+    baseline_raw = simulate_strategy(
+        model, feature_cols, total_laps,
+        "MEDIUM", "SOFT", int(total_laps * 0.44),
+        pace_offset=0.0, race_year=race_year,
+    )
+    global_offset = (real_total - baseline_raw) / total_laps
+
+    # ยาง/รอบพิทที่ดีที่สุดไม่ขึ้นกับตัวนักแข่ง (โมเดลไม่ใช้ driver one-hot ระหว่างจำลอง)
+    # จึงหาครั้งเดียวแล้วใช้ร่วมกันได้ทั้งกริด แทนที่จะวน grid search ต่อคน
+    forecast_lap_times = [real_total / total_laps] * total_laps
+    candidates = grid_search_strategies(
+        model, feature_cols, forecast_lap_times, total_laps,
+        race_year=race_year,
+    )
+    one_stop = [c for c in candidates if c["num_stops"] == 1]
+    best = one_stop[0] if one_stop else candidates[0]
+
+    # ฟอร์มจริงของแต่ละนักแข่งในฤดูกาล 2026 (เฉลี่ยจากผลแข่งจริงที่จบไปแล้ว) — ทำให้อันดับ
+    # ที่คาดเดาขยับตามผลจริงที่ทยอยออกมา ถ้ายังไม่มีผลแข่งจริงเลย (ต้นฤดูกาล) จะ fallback
+    # เป็นค่ากระจายตามลำดับ deterministic แทน (ไม่ใช่ค่าคงที่ตายตัว) ผู้เรียกที่ต้อง backtest
+    # สนามที่จบไปแล้ว (_completed_race_validation_for_day) จะส่ง driver_pace ของตัวเองเข้ามา
+    # แทน (คำนวณจากเฉพาะสนามที่เกิดก่อนหน้า กัน look-ahead — ดูจุดที่เรียก)
+    if driver_pace is None:
+        driver_pace = _driver_form_pace(date.today().isoformat())
+
+    strategies = []
+    for index, code in enumerate(FORECAST_DRIVER_ROSTER):
+        pace = driver_pace.get(code, 1.0 + index * 0.09) + global_offset
+        strategies.append(DriverStrategy(
+            code=code,
+            first_compound=best["first_compound"],
+            second_compound=best["second_compound"],
+            pit_lap=best["pit_lap"],
+            pace_offset=pace,
+            grid_position=index + 1,
+        ))
+
+    predictor = LapPredictor(model=model, features=feature_cols)
+    all_results = simulate_strategies_batch(
+        predictor, strategies, total_laps, race_year=race_year,
+    )
+    return all_results, best
+
+
+@lru_cache(maxsize=2)
+def _completed_race_validation_for_day(day_key: str):
+    """
+    ผลแข่งจริงของสนาม 2026 ที่จบไปแล้ว พร้อมสิ่งที่โมเดลจะคาดเดา ถ้าไม่มีใครรู้ผลจริงมาก่อน
+    (รันกลไกเดียวกับตอนกด "คาดเดาอันดับ" ใน forecast_page ทุกอย่าง) — ไว้เทียบดูว่าคาดเดา
+    ถูกแค่ไหนเทียบผลจริง cache ไว้ต่อวันเพราะแต่ละสนามต้อง grid search + จำลองทั้งกริดใหม่
+
+    Walk-forward: ฟอร์มนักแข่งที่ใช้ backtest สนามหนึ่งๆ คำนวณจาก "เฉพาะสนามที่แข่งก่อนหน้า
+    สนามนั้น" เท่านั้น (ไม่ใช่ทุกสนามใน live_rows รวมกัน) ไม่งั้นจะมองไปข้างหน้า (เอาผลของ
+    สนามหลังจากนั้นมาช่วยทาย) ทำให้ diff % ดูแม่นเกินจริง และได้ผู้ชนะที่ทายเป็นคนเดิมซ้ำทุก
+    สนามเสมอ (คนที่ฟอร์มเฉลี่ยดีที่สุดในภาพรวมทั้งชุด ไม่ใช่ ณ เวลาจริงก่อนสนามนั้นแข่ง)
+    """
+    live_rows = _load_fastf1_2026_results(day_key)
+    if not live_rows:
+        return []
+
+    values = []
+    for row in live_rows:
+        race_info = next(
+            (info for info in FORECAST_RACES.values()
+             if info["gp"] == row["gp"] and info["year"] == 2026),
+            None,
+        )
+        predicted_winner = None
+        predicted_time_str = None
+        diff_pct = None
+        if race_info is not None:
+            try:
+                total_laps = race_info["laps"]
+                real_total = row["actual_total"]
+                prior_rows = [r for r in live_rows if r["race_date"] < row["race_date"]]
+                driver_pace = _driver_form_pace_from_rows(prior_rows)
+                all_results, _ = _predict_grid_results(
+                    total_laps, race_info["year"], real_total, driver_pace=driver_pace,
+                )
+                if all_results:
+                    predicted_time = all_results[0].total_time
+                    predicted_winner = all_results[0].code
+                    predicted_time_str = fmt_time(predicted_time)
+                    diff_pct = round((predicted_time - real_total) / real_total * 100, 2)
+            except Exception:
+                pass
+
+        values.append({
+            **row,
+            "predicted_winner": predicted_winner,
+            "predicted_time_str": predicted_time_str,
+            "diff_pct": diff_pct,
+        })
+    return values
+
+
 def _completed_race_validation():
-    return _load_fastf1_2026_results(date.today().isoformat())
+    return _completed_race_validation_for_day(date.today().isoformat())
 
 
 # ── Validation combinations — คำนวณจริงจาก lap cache ที่มีอยู่บนดิสก์ ─
@@ -295,10 +413,18 @@ def _completed_race_validation():
 _CACHE_COMBO_RE = re.compile(r"^(\d{4})_(\d+)_([A-Z0-9]+)\.pkl$")
 
 
-def _discover_cached_combos(races: dict, max_combos: int = 14):
-    """หา (year, round, driver, label) ที่มี lap cache จริงอยู่แล้ว ตรงกับสนามในฤดูกาลนี้"""
+def _discover_cached_combos(races: dict, max_combos: int = 18):
+    """หา (year, round, driver, label) ที่มี lap cache จริงอยู่แล้ว ตรงกับสนามในฤดูกาลนี้
+
+    เลือกแบบ round-robin ข้ามรอบ (1 คนจากทุกรอบก่อน แล้วค่อยวนรอบสอง) แทนการเรียงแล้ว
+    ตัดตรงๆ — ถ้า cache มีนักแข่งของรอบแรกอยู่เยอะ (เช่นเทรนทั้งกริด ~20 คนของรอบเดียว)
+    การเรียงแล้วตัดจะทำให้ตาราง Training Data โชว์แต่รอบแรกรอบเดียว ทั้งที่จริงเทรนหลายรอบ
+    ทำให้เข้าใจผิดว่าโมเดลเห็นแค่สนามเดียว round-robin กันปัญหานี้โดยรับประกันว่าทุกรอบที่มี
+    cache จะมีตัวแทนอยู่ในตาราง (ถ้า max_combos พอ อย่างน้อย 2 คน/รอบ ให้ same_param_compare
+    เทียบ driver ในรอบเดียวกันได้ด้วย)
+    """
     round_to_race = {info["gp"]: info for info in races.values()}
-    found = []
+    by_round: dict = {}
     cache_dir = Path("cache")
     if cache_dir.exists():
         for f in cache_dir.glob("*.pkl"):
@@ -309,9 +435,23 @@ def _discover_cached_combos(races: dict, max_combos: int = 14):
             info = round_to_race.get(round_no)
             if info is None or info["year"] != year:
                 continue
-            found.append((year, round_no, driver, info["label"]))
-    found.sort(key=lambda x: (x[1], x[2]))
-    return found[:max_combos]
+            by_round.setdefault(round_no, []).append((year, round_no, driver, info["label"]))
+
+    for entries in by_round.values():
+        entries.sort(key=lambda x: x[2])
+
+    found = []
+    rounds = sorted(by_round)
+    while rounds and len(found) < max_combos:
+        for round_no in list(rounds):
+            if len(found) >= max_combos:
+                break
+            bucket = by_round[round_no]
+            if bucket:
+                found.append(bucket.pop(0))
+            if not bucket:
+                rounds.remove(round_no)
+    return found
 
 
 def _compute_combo_stats(year, round_no, driver, label):
@@ -591,40 +731,83 @@ def index():
     )
 
 
+# ── คำอธิบาย feature สำหรับหน้า Model Report — จับคู่กับ obj["features"] จริงของ
+# model.pkl (ไม่ใช่รายการที่พิมพ์ไว้ล่วงหน้า) กันไม่ให้หน้านี้อ้างถึง feature ที่โมเดล
+# ไม่ได้ใช้จริง (เช่น Sector1/2/3Sec ที่ตัดออกเพราะ leak คำตอบ — ดู "Training data
+# gotcha" ใน CLAUDE.md) หรือขาด feature ที่มีจริงไป (DriverCode_*/GP_Label_*/RaceYear
+# ที่เพิ่มเข้ามาไม่ครบ ถ้าพิมพ์ไว้ตายตัว)
+_FEATURE_DESCRIPTIONS = {
+    "LapNumber":     ("Numeric", "ลำดับ lap ในการแข่งขัน"),
+    "TyreLife":      ("Numeric", "จำนวน lap ที่ใช้ยางชุดนี้มาแล้ว"),
+    "FuelEst":       ("Numeric", "ประมาณน้ำมันที่เหลือ (0–1 normalize)"),
+    "StintNumber":   ("Numeric", "stint ที่เท่าไหร่ (1 = ก่อนพิทครั้งแรก)"),
+    "StintLap":      ("Numeric", "lap ที่เท่าไหร่ภายใน stint ปัจจุบัน"),
+    "PitStopsSoFar": ("Numeric", "จำนวนครั้งพิทที่ทำไปแล้ว"),
+    "Position":      ("Numeric", "อันดับ/grid position ในขณะนั้น"),
+    "IsOutLap":      ("Binary",  "1 = lap แรกหลังออกจากพิต"),
+    "IsInLap":       ("Binary",  "1 = lap ที่เข้าพิต"),
+    "RaceYear":      ("Numeric", "ปีที่แข่ง"),
+}
+
+
+def _describe_feature(name: str):
+    if name in _FEATURE_DESCRIPTIONS:
+        return _FEATURE_DESCRIPTIONS[name]
+    if name.startswith("Compound_"):
+        return "One-Hot", f"ยางชนิด {name.split('_', 1)[1]}"
+    if name.startswith("TrackStatus_"):
+        code = name.split("_", 1)[1]
+        return "One-Hot", f"รหัสสถานะสนาม {code} (ตัวเลขรวมกันได้ เช่น '124' = ธง 1+2+4 พร้อมกัน)"
+    if name.startswith("DriverCode_"):
+        code = name.split("_", 1)[1]
+        return "One-Hot", f"นักแข่ง {code} — ใช้ตอนประเมินย้อนหลัง (Model Report/Strategy Analysis) เท่านั้น ไม่ได้ใช้ตอนจำลองไปข้างหน้า (Strategy Lab/Future Standings)"
+    if name.startswith("GP_Label_"):
+        rnd = name[len("GP_Label_"):]
+        return "One-Hot", f"รอบที่ {rnd} ของฤดูกาลที่เทรน — ใช้ตอนประเมินย้อนหลังเท่านั้นเหมือนกัน"
+    return "Numeric", "—"
+
+
+def _build_feature_rows(trained_model, cols):
+    """สร้างตาราง feature จาก obj['features'] จริง + feature_importances_ จริงของโมเดล
+    (ไม่ใช่ค่า impact ที่เดาไว้ล่วงหน้า) เรียงจาก impact สูงไปต่ำ"""
+    importances = trained_model.feature_importances_
+    max_importance = float(max(importances)) if len(importances) else 0.0
+    rows = []
+    for name, imp in zip(cols, importances):
+        ftype, desc = _describe_feature(name)
+        impact = max(1, round(float(imp) / max_importance * 5)) if max_importance > 0 else 1
+        rows.append({
+            "name": name, "type": ftype, "desc": desc,
+            "impact": impact, "importance": round(float(imp), 4),
+        })
+    rows.sort(key=lambda r: r["importance"], reverse=True)
+    return rows
+
+
 # ── หน้า Model Report — หลักฐาน training ────────────────
 @app.route("/model-report")
 def model_report_page():
     hyperparams = [
-        {"name": "n_estimators",      "value": "500", "desc": "จำนวน decision trees"},
-        {"name": "max_depth",         "value": "16",  "desc": "ความลึกสูงสุดของแต่ละต้น"},
-        {"name": "min_samples_split", "value": "3",   "desc": "sample ขั้นต่ำก่อนแตก node"},
-        {"name": "min_samples_leaf",  "value": "2",   "desc": "sample ขั้นต่ำที่ leaf"},
-        {"name": "random_state",      "value": "42",  "desc": "seed สำหรับ reproducibility"},
+        {"name": "n_estimators",      "value": str(model.n_estimators),      "desc": "จำนวน decision trees"},
+        {"name": "max_depth",         "value": str(model.max_depth),         "desc": "ความลึกสูงสุดของแต่ละต้น"},
+        {"name": "min_samples_split", "value": str(model.min_samples_split), "desc": "sample ขั้นต่ำก่อนแตก node"},
+        {"name": "min_samples_leaf",  "value": str(model.min_samples_leaf),  "desc": "sample ขั้นต่ำที่ leaf"},
+        {"name": "random_state",      "value": str(model.random_state),      "desc": "seed สำหรับ reproducibility"},
     ]
-    features = [
-        {"name": "LapNumber",       "type": "Numeric",  "desc": "ลำดับ lap ในการแข่งขัน",                  "impact": 3},
-        {"name": "TyreLife",        "type": "Numeric",  "desc": "จำนวน lap ที่ใช้ยางชุดนี้มาแล้ว",          "impact": 5},
-        {"name": "FuelEst",         "type": "Numeric",  "desc": "ประมาณน้ำมันที่เหลือ (0–1 normalize)",     "impact": 4},
-        {"name": "StintNumber",     "type": "Numeric",  "desc": "stint ที่เท่าไหร่ (1=ก่อนพิท)",           "impact": 3},
-        {"name": "StintLap",        "type": "Numeric",  "desc": "lap ที่เท่าไหร่ภายใน stint ปัจจุบัน",     "impact": 4},
-        {"name": "PitStopsSoFar",   "type": "Numeric",  "desc": "จำนวนครั้งพิทที่ทำไปแล้ว",                "impact": 3},
-        {"name": "Position",        "type": "Numeric",  "desc": "อันดับในขณะนั้น",                         "impact": 2},
-        {"name": "Sector1Sec",      "type": "Numeric",  "desc": "เวลา Sector 1 (วินาที)",                  "impact": 5},
-        {"name": "Sector2Sec",      "type": "Numeric",  "desc": "เวลา Sector 2 (วินาที)",                  "impact": 5},
-        {"name": "Sector3Sec",      "type": "Numeric",  "desc": "เวลา Sector 3 (วินาที)",                  "impact": 5},
-        {"name": "IsOutLap",        "type": "Binary",   "desc": "1 = lap แรกหลังออกจากพิต",               "impact": 3},
-        {"name": "IsInLap",         "type": "Binary",   "desc": "1 = lap ที่เข้าพิต",                     "impact": 3},
-        {"name": "Compound_SOFT",   "type": "One-Hot",  "desc": "ยาง Soft — grip สูง เสื่อมเร็ว",         "impact": 5},
-        {"name": "Compound_MEDIUM", "type": "One-Hot",  "desc": "ยาง Medium — balance",                   "impact": 5},
-        {"name": "Compound_HARD",   "type": "One-Hot",  "desc": "ยาง Hard — ทนทาน pace ต่ำกว่า",          "impact": 4},
-        {"name": "TrackStatus_1",   "type": "One-Hot",  "desc": "สนามปกติ (Green Flag)",                  "impact": 2},
-    ]
+    features = _build_feature_rows(model, feature_cols)
 
     train_combos = COMBOS
     mae_overall  = MODEL_MAE
     rmse_overall = MODEL_RMSE
-    total_laps_trained = sum(c["laps"] for c in COMBOS)
+    # "evaluated" ตั้งใจแยกจาก "trained" — COMBOS คือตัวอย่าง 18 combo ที่สุ่มโชว์เป็น demo
+    # ตรวจสอบด้านล่าง ไม่ใช่ทั้งหมดที่เทรนจริง (ดู trained_combo_count/trained_laps_total
+    # ด้านล่างที่มาจาก TRAINED_META ซึ่งเป็น meta ของทุก combo ที่ใช้ .fit() จริง)
+    total_laps_evaluated = sum(c["laps"] for c in COMBOS)
     avg_diff_pct = round(sum(c["diff_pct"] for c in COMBOS) / len(COMBOS), 2) if COMBOS else 0.0
+
+    trained_combo_count  = len(TRAINED_META)
+    trained_laps_total   = sum(m.get("total_laps", 0) for m in TRAINED_META)
+    trained_circuit_count = len({(m.get("year"), m.get("gp")) for m in TRAINED_META})
 
     from itertools import combinations as _comb
     groups = {}
@@ -656,10 +839,13 @@ def model_report_page():
         train_combos=train_combos,
         mae_overall=mae_overall,
         rmse_overall=rmse_overall,
-        total_laps_trained=total_laps_trained,
+        total_laps_evaluated=total_laps_evaluated,
         avg_diff_pct=avg_diff_pct,
         same_param_compare=same_param_compare,
         chart_combos=chart_combos,
+        trained_combo_count=trained_combo_count,
+        trained_laps_total=trained_laps_total,
+        trained_circuit_count=trained_circuit_count,
     )
 
 
@@ -906,9 +1092,9 @@ def team_detail_page(slug):
 def about_page():
     return render_template(
         "about.html",
-        mae=MODEL_MAE, rmse=MODEL_RMSE, combo_count=len(COMBOS),
-        total_laps_trained=sum(c["laps"] for c in COMBOS) if COMBOS else 0,
-        circuit_count=len({(c["year"], c["round"]) for c in COMBOS}) if COMBOS else 0,
+        mae=MODEL_MAE, rmse=MODEL_RMSE, combo_count=len(TRAINED_META),
+        total_laps_trained=sum(m.get("total_laps", 0) for m in TRAINED_META),
+        circuit_count=len({(m.get("year"), m.get("gp")) for m in TRAINED_META}),
     )
 
 
@@ -930,52 +1116,16 @@ def forecast_page():
     result = None
     leaderboard = []
     error_msg = None
-    completed_validation = []
+    # โชว์เสมอไม่ว่าจะกด "คาดเดาอันดับ" แล้วหรือยัง — ไม่ขึ้นกับสนามที่เลือกคาดเดาเลย จึงไม่ควร
+    # รอให้ submit ฟอร์มก่อนถึงจะเห็นว่าระบบเคยทายสนามที่จบไปแล้วถูกแค่ไหน
+    completed_validation = _completed_race_validation()
 
     if request.method == "POST" or request.args.get("race_key"):
-        completed_validation = _completed_race_validation()
         try:
             reference_lap = _forecast_reference_lap_pace()
             real_total = reference_lap * total_laps
 
-            baseline_raw = simulate_strategy(
-                model, feature_cols, total_laps,
-                "MEDIUM", "SOFT", int(total_laps * 0.44),
-                pace_offset=0.0, race_year=race_info["year"],
-            )
-            global_offset = (real_total - baseline_raw) / total_laps
-
-            # ยาง/รอบพิทที่ดีที่สุดไม่ขึ้นกับตัวนักแข่ง (โมเดลไม่ใช้ driver one-hot ระหว่าง
-            # จำลอง) จึงหาครั้งเดียวแล้วใช้ร่วมกันได้ทั้งกริด แทนที่จะวน grid search ต่อคน
-            forecast_lap_times = [real_total / total_laps] * total_laps
-            candidates = grid_search_strategies(
-                model, feature_cols, forecast_lap_times, total_laps,
-                race_year=race_info["year"],
-            )
-            one_stop = [c for c in candidates if c["num_stops"] == 1]
-            best = one_stop[0] if one_stop else candidates[0]
-
-            # ฟอร์มจริงของแต่ละนักแข่งในฤดูกาล 2026 (เฉลี่ยจากผลแข่งจริงที่จบไปแล้ว) — ทำให้
-            # อันดับที่คาดเดาขยับตามผลจริงที่ทยอยออกมา ถ้ายังไม่มีผลแข่งจริงเลย (ต้นฤดูกาล)
-            # จะ fallback เป็นค่ากระจายตามลำดับ deterministic แทน (ไม่ใช่ค่าคงที่ตายตัว)
-            driver_pace = _driver_form_pace(date.today().isoformat())
-
-            strategies = []
-            for index, code in enumerate(FORECAST_DRIVER_ROSTER):
-                pace = driver_pace.get(code, 1.0 + index * 0.09) + global_offset
-                strategies.append(DriverStrategy(
-                    code=code,
-                    first_compound=best["first_compound"],
-                    second_compound=best["second_compound"],
-                    pit_lap=best["pit_lap"],
-                    pace_offset=pace,
-                    grid_position=index + 1,
-                ))
-
-            predictor = LapPredictor(model=model, features=feature_cols)
-            all_results = simulate_strategies_batch(
-                predictor, strategies, total_laps, race_year=race_info["year"],
-            )
+            all_results, _best = _predict_grid_results(total_laps, race_info["year"], real_total)
 
             win_probs = compute_win_probabilities(all_results, lap_time_std=MODEL_RMSE)
             p1_time = all_results[0].total_time if all_results else 0.0

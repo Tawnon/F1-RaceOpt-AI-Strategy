@@ -44,8 +44,8 @@
       <span class="metric-u">sim vs real · tolerance ±1%</span>
     </div>
     <div class="metric">
-      <span class="metric-k">Laps evaluated</span>
-      <span class="metric-v" data-countup="{{ total_laps_trained }}">{{ total_laps_trained }}</span>
+      <span class="metric-k">Laps evaluated (demo below)</span>
+      <span class="metric-v" data-countup="{{ total_laps_evaluated }}">{{ total_laps_evaluated }}</span>
       <span class="metric-u">{{ train_combos|length }} combinations</span>
     </div>
     <div class="metric">
@@ -104,6 +104,9 @@
     <h2 class="section-title" id="combo-h">ผลรายละเอียดต่อ combination</h2>
     <span class="section-note">real vs sim per driver</span>
   </div>
+  <p class="section-sub">
+    ตัวอย่าง {{ train_combos|length }} combination ที่สุ่มมาจากทุกรอบที่เทรน (ไม่ใช่ทั้งหมด — ดูจำนวนจริงที่ "Trained on" ในข้อ 04 ด้านล่าง) เพื่อตรวจสอบว่าเวลาจำลองใกล้เวลาจริงแค่ไหน
+  </p>
 
   <div class="panel">
     <div class="tbl-wrap" tabindex="0" role="region" aria-label="ตารางผลการตรวจสอบต่อ combination">
@@ -234,7 +237,14 @@
     <span class="section-note">RandomForestRegressor</span>
   </div>
 
-  <div class="panel">
+  <div class="specbar">
+    <div class="spec"><span class="spec-k">Trained on</span><span class="spec-v">{{ trained_combo_count }} combinations</span></div>
+    <div class="spec"><span class="spec-k">Laps trained</span><span class="spec-v">{{ trained_laps_total }}</span></div>
+    <div class="spec"><span class="spec-k">Circuits</span><span class="spec-v">{{ trained_circuit_count }}</span></div>
+    <div class="spec"><span class="spec-k">Source</span><span class="spec-v">TRAIN_ROUNDS ใน train_model_advanced.py</span></div>
+  </div>
+
+  <div class="panel" style="margin-top: 14px">
     <div class="tbl-wrap" tabindex="0" role="region" aria-label="ตาราง hyperparameters">
       <table class="tbl">
         <thead>

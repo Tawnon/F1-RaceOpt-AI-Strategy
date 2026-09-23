@@ -11,7 +11,7 @@ RaceOpt is a Flask app that analyzes and simulates Formula 1 race strategy from 
 ```bash
 pip install -r requirements.txt   # fastf1, pandas, numpy, scikit-learn, flask, requests, gunicorn
 python app.py                     # dev server on :5000, debug=True (auto-reload)
-python train_model_advanced.py    # retrain model.pkl from TRAIN_COMBINATIONS in that file
+python train_model_advanced.py    # retrain model.pkl from TRAIN_ROUNDS in that file (full grid per round, auto-expanded via get_available_drivers)
 python fetch_media.py             # one-off: cache real driver/circuit photos to static/img/ (see media.py)
 ```
 

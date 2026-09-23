@@ -361,9 +361,12 @@ def load_multi_race_laps(race_driver_list):
         try:
             print(f"  โหลด {driver} @ {gp} {year}...")
             data, meta = load_race_laps(year, gp, driver)
-            data["DriverCode"] = driver
-            data["RaceYear"]   = year
-            data["GP_Label"]   = gp
+            data["DriverCode"]  = driver
+            data["RaceYear"]    = year
+            data["GP_Label"]    = gp
+            # ตัวระบุ race ดิบ (ไม่ผ่าน get_dummies) ไว้เป็น group สำหรับ GroupShuffleSplit
+            # ใน train_model_advanced.py กัน lap ของ race เดียวกันหลุดไปอยู่ทั้ง train และ test
+            data["_race_group"] = f"{year}_{gp}"
             all_data.append(data)
             all_meta.append(meta)
             print(f"    ✓ {len(data)} laps")
