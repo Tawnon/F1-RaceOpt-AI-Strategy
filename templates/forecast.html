@@ -16,23 +16,22 @@
 
 <header class="page-head">
   <p class="eyebrow">06 / Season forecast</p>
-  <h1 class="page-title">คาดเดาอันดับสนามที่ยังไม่ได้แข่ง</h1>
+  <h1 class="page-title">Predict standingsuncompleted circuits</h1>
   <p class="lede">
-    เลือกสนามในปฏิทิน 2026 ที่ยังไม่ได้แข่ง ให้โมเดลหากลยุทธ์ยางที่ดีที่สุดของสนามนั้น แล้วจัดอันดับ
-    ทั้งกริดจากฟอร์มจริงของแต่ละนักแข่งในฤดูกาลนี้ (ไม่ใช่ตารางค่าคงที่)
+    Select an uncompleted circuit from the 2026 calendar. The model finds the best tyre strategy for that circuit, then ranks the entire grid using each driver's real form from the completed races this season rather than a fixed table.
   </p>
 </header>
 
 <section aria-labelledby="sel-h">
   <div class="panel">
     <div class="panel-head">
-      <h2 class="panel-title" id="sel-h">เลือกสนาม</h2>
-      <span class="panel-note push">{{ available_races|length }} สนามที่ยังไม่ได้แข่ง</span>
+      <h2 class="panel-title" id="sel-h">Select circuit</h2>
+      <span class="panel-note push">{{ available_races|length }} uncompleted circuits</span>
     </div>
     <div class="panel-body">
       <form method="post" class="form-row">
         <div class="field">
-          <label for="race_key">สนามแข่ง</label>
+          <label for="race_key">Circuit</label>
           <select name="race_key" id="race_key">
             {% for key, info in available_races.items() %}
             <option value="{{ key }}" {% if key == selected_race_key %}selected{% endif %}>
@@ -43,19 +42,19 @@
         </div>
         <div class="field">
           <button type="submit" class="btn block">
-            คาดเดาอันดับ
+            Predict standings
             <svg class="btn-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
           </button>
         </div>
       </form>
     </div>
-    <div class="panel-foot">โมเดลไม่รู้ผลจริงของสนามนี้ล่วงหน้า — ใช้แค่ปฏิทิน, กลยุทธ์ยาง, และฟอร์มจริงของนักแข่งจากสนามที่แข่งจบไปแล้วในฤดูกาลนี้</div>
+    <div class="panel-foot">The model does not know the real result of this circuit in advance. It uses only the calendar, tyre strategy, and each driver's real form from completed circuits in the season.</div>
   </div>
 </section>
 
 {% if error %}
 <div class="notice notice-bad" role="alert">
-  <p class="notice-title">คาดเดาไม่สำเร็จ</p>
+  <p class="notice-title">Prediction failed</p>
   <p>{{ error }}</p>
 </div>
 {% endif %}
@@ -64,29 +63,29 @@
 
 <section aria-labelledby="res-h">
   <div class="specbar">
-    <div class="spec"><span class="spec-k">สนาม</span><span class="spec-v">{{ result.race_label }}</span></div>
+    <div class="spec"><span class="spec-k">circuits</span><span class="spec-v">{{ result.race_label }}</span></div>
     <div class="spec"><span class="spec-k">Circuit</span><span class="spec-v">{{ result.circuit }}</span></div>
     <div class="spec"><span class="spec-k">Round</span><span class="spec-v">{{ result.round }}</span></div>
     <div class="spec"><span class="spec-k">Race date</span><span class="spec-v">{{ result.race_date }}</span></div>
     <div class="spec"><span class="spec-k">Distance</span><span class="spec-v">{{ result.total_laps }} laps</span></div>
-    <div class="spec"><span class="spec-k">P1 time (คาดเดา)</span><span class="spec-v">{{ result.p1_time }}</span></div>
+    <div class="spec"><span class="spec-k">P1 time (predicted)</span><span class="spec-v">{{ result.p1_time }}</span></div>
   </div>
 </section>
 
 <div class="notice {% if result.driver_pace_races_used == 0 %}notice-warn{% endif %}">
   <p class="notice-title">{{ result.driver_pace_source }}</p>
-  <p>ยิ่งมีผลแข่งจริงของฤดูกาล 2026 มาก ฟอร์มของแต่ละนักแข่งที่ใช้คาดเดาก็ยิ่งสะท้อนความจริงมากขึ้น — ไม่ใช่ตารางที่ตายตัวเหมือนก่อน</p>
+  <p>The more completed 2026 races are available, the more accurately each driver's form reflects reality instead of a fixed table.</p>
 </div>
 
 <section aria-labelledby="lb-h">
   <div class="section-head">
     <span class="section-no">01</span>
     <h2 class="section-title" id="lb-h">Projected Standings</h2>
-    <span class="section-note">{{ leaderboard|length }} คัน</span>
+    <span class="section-note">{{ leaderboard|length }} cars</span>
   </div>
 
   <div class="panel">
-    <div class="tbl-wrap" tabindex="0" role="region" aria-label="ตารางอันดับที่คาดเดา">
+    <div class="tbl-wrap" tabindex="0" role="region" aria-label="Projected standings table">
       <table class="tbl">
         <thead>
           <tr>
@@ -125,15 +124,15 @@
         </tbody>
       </table>
     </div>
-    <div class="panel-foot">Gap = ส่วนต่างเวลารวมจากอันดับ 1 (วินาที) · Win % ประเมินด้วย Monte Carlo จาก RMSE ของโมเดล</div>
+    <div class="panel-foot">Gap = total-time difference from P1 (seconds) · Win % estimates are calculated with Monte Carlo using the model's RMSE</div>
   </div>
 </section>
 
 {% else %}
 
 <section class="empty" aria-live="polite">
-  <p class="empty-title">ยังไม่มีข้อมูลคาดเดาอันดับ</p>
-  <p class="empty-note">เลือกสนามด้านบนแล้วกด "คาดเดาอันดับ" เพื่อเริ่มต้น</p>
+  <p class="empty-title">No forecast data yet</p>
+  <p class="empty-note">Select a circuit above and press "Predict standings" to begin</p>
 </section>
 
 {% endif %}
@@ -142,12 +141,11 @@
 <section aria-labelledby="hist-h">
   <div class="section-head">
     <span class="section-no">02</span>
-    <h2 class="section-title" id="hist-h">Model Validation — สนาม 2026 ที่จบแล้ว</h2>
-    <span class="section-note">{{ completed_validation|length }} สนาม</span>
+    <h2 class="section-title" id="hist-h">Model validation — completed 2026 circuits</h2>
+    <span class="section-note">{{ completed_validation|length }} circuits</span>
   </div>
   <p class="section-sub">
-    เทียบสิ่งที่โมเดลจะคาดเดา (รันกลไกเดียวกับตอนกด "คาดเดาอันดับ" ด้านบนทุกขั้นตอน) กับผลจริงที่ออกมาแล้ว —
-    ยิ่ง Diff น้อย ยิ่งแปลว่าโมเดลแม่นกับสนามนั้น ผลจริงกลุ่มนี้ถูกใช้คำนวณฟอร์มนักแข่งในข้อ 01 ด้วย
+    Compare what the model would predict at every step using the same mechanism as the "Predict standings" button above with the results that actually occurred. The smaller the difference, the more accurate the model is for that circuit. This real data is used to calculate driver form in section 01.
   </p>
   <div class="card-grid">
     {% for row in completed_validation %}
@@ -159,21 +157,21 @@
       <div class="panel-body">
         <div class="metrics cols-3">
           <div class="metric">
-            <span class="metric-k">Actual Winner</span>
+            <span class="metric-k">Actual winner</span>
             <span class="metric-v">{{ row.winner }}</span>
             <span class="metric-u">{{ row.actual_time }}</span>
           </div>
           <div class="metric">
-            <span class="metric-k">Model Winner</span>
+            <span class="metric-k">Model winner</span>
             {% if row.predicted_winner %}
             <span class="metric-v {% if row.predicted_winner == row.winner %}ok{% else %}warn{% endif %}">{{ row.predicted_winner }}</span>
             <span class="metric-u">{{ row.predicted_time_str }}</span>
             {% else %}
-            <span class="metric-v dim">คำนวณไม่สำเร็จ</span>
+            <span class="metric-v dim">Calculation failed</span>
             {% endif %}
           </div>
           <div class="metric">
-            <span class="metric-k">Diff (จำลอง − จริง)</span>
+            <span class="metric-k">Difference (simulated − real)</span>
             {% if row.diff_pct is not none %}
             <span class="metric-v {% if row.diff_pct|abs < 3 %}ok{% elif row.diff_pct|abs < 8 %}warn{% else %}bad{% endif %}">{{ "%+.2f"|format(row.diff_pct) }}%</span>
             {% else %}

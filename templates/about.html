@@ -5,20 +5,17 @@
 
 <header class="page-head">
   <p class="eyebrow">RaceOpt / Field notes</p>
-  <h1 class="page-title">จากข้อมูลสู่การตัดสินใจ</h1>
+  <h1 class="page-title">From data to decisions</h1>
   <p class="lede">
-    RaceOpt ประมวลผลกลยุทธ์การแข่งขัน F1 จาก lap telemetry จริงทั้งเส้นทาง — ตั้งแต่ดึงข้อมูลดิบ,
-    train โมเดลทำนายเวลาต่อรอบ, จำลองการแข่งขันทั้งกริด ไปจนถึงค้นหากลยุทธ์ทางเลือกที่เร็วกว่า
+    RaceOpt processes F1 race strategy from real lap telemetry throughout the workflow — from raw data collection,
+    training the lap-time prediction model, simulating the full grid, to finding faster strategic alternatives
   </p>
 </header>
 
 <div class="notice notice-warn">
-  <p class="notice-title">ขอบเขตของเครื่องมือ</p>
+  <p class="notice-title">Scope of the tool</p>
   <p>
-    RaceOpt เป็นแพลตฟอร์มวิเคราะห์อิสระที่จัดทำขึ้นเพื่อการศึกษา ไม่ใช่ผลิตภัณฑ์อย่างเป็นทางการ
-    และไม่มีความเกี่ยวข้อง ไม่ได้รับการรับรอง หรือสังกัดกับ Formula 1, FIA, ทีมแข่งใดๆ หรือเครื่องหมายการค้าที่เกี่ยวข้อง
-    ตัวเลขทั้งหมดเป็นผลจากแบบจำลองทางสถิติที่ train จากอดีต ไม่ใช่การพยากรณ์ผลการแข่งขันจริงในอนาคต
-    และไม่ได้จำลองปัจจัยอย่างพัฒนาการของรถ, กลยุทธ์ทีมคู่แข่งแบบ real-time, หรือการตัดสินใจของนักแข่งกลางสนาม
+    RaceOpt is an independent analysis platform created for educational purposes. It is not an official product and is not affiliated with, endorsed by, or associated with Formula 1, FIA, any racing teams, or related trademarks. All figures come from a statistical model trained on historical data and are not real race predictions. It also does not model future car development, live rival strategy, or driver decisions mid-race.
   </p>
 </div>
 
@@ -50,13 +47,10 @@
   <div class="section-head">
     <span class="section-no">01</span>
     <h2 class="section-title" id="data-h">Data — FastF1 lap telemetry</h2>
-    <span class="section-note">ต้นทางข้อมูลทั้งหมด</span>
+    <span class="section-note">Source of all data</span>
   </div>
   <p class="section-sub">
-    ทุกตัวเลขในเว็บนี้เริ่มจาก <a href="https://docs.fastf1.dev/" target="_blank" rel="noopener" style="color: var(--brand); text-decoration: underline">FastF1</a> —
-    ไลบรารีที่ดึงข้อมูล timing/telemetry อย่างเป็นทางการของ F1 มาแปลงเป็น lap-by-lap dataset ต่อคน:
-    เวลาต่อรอบ, เวลาแต่ละ sector, ชนิดยาง, อายุยาง, สถานะแทร็ก, สภาพอากาศ และตำแหน่งกริดสตาร์ทจริง
-    ข้อมูลถูก cache ไว้บนดิสก์หลังดึงครั้งแรก (ดูโฟลเดอร์ <code>cache/</code>) เพื่อไม่ต้องยิง request ซ้ำทุกครั้งที่โหลดหน้า
+    All figures on this website begin with <a href="https://docs.fastf1.dev/" target="_blank" rel="noopener" style="color: var(--brand); text-decoration: underline">FastF1</a> — the official F1 timing and telemetry library that converts the data into a driver-by-driver lap-by-lap dataset. This includes lap times, sector times, tyre compound, tyre age, track status, weather, and actual starting grid position. Data is cached on disk after the first fetch (see the <code>cache/</code> folder) so the page does not need to send repeated requests.
   </p>
 </section>
 
@@ -65,12 +59,10 @@
   <div class="section-head">
     <span class="section-no">02</span>
     <h2 class="section-title" id="model-h">Model — Random Forest Regressor</h2>
-    <span class="section-note">ทำนายเวลาต่อรอบ</span>
+    <span class="section-note">Predict lap times</span>
   </div>
   <p class="section-sub">
-    โมเดล RandomForestRegressor train จาก lap telemetry จริงเพื่อทำนาย "เวลาต่อรอบ" จาก feature เช่น อายุยาง,
-    ชนิดยาง, จำนวนน้ำมันที่เหลือโดยประมาณ, และ stint ปัจจุบัน — validate ด้วยการเทียบเวลาที่ทำนายกับเวลาจริง
-    ของนักแข่งที่ไม่ได้อยู่ใน training set รายละเอียด hyperparameter และ feature ทั้งหมดดูได้ที่
+    The RandomForestRegressor model is trained on real lap telemetry to predict lap time from features such as tyre age, compound, estimated fuel remaining, and the current stint. It is validated by comparing predicted and real times for drivers outside the training set. See the full hyperparameters and features in the
     <a href="{{ url_for('model_report_page') }}" style="color: var(--brand); text-decoration: underline">Model Report</a>
   </p>
 </section>
@@ -79,13 +71,11 @@
 <section aria-labelledby="sim-h">
   <div class="section-head">
     <span class="section-no">03</span>
-    <h2 class="section-title" id="sim-h">Simulation — จำลองทั้งกริด</h2>
+    <h2 class="section-title" id="sim-h">Simulation — full-grid model</h2>
     <span class="section-note">Strategy Lab</span>
   </div>
   <p class="section-sub">
-    เมื่อกำหนดกลยุทธ์ (ยาง + รอบพิท) ระบบสร้าง feature ของทุก lap ตามกลยุทธ์นั้น ให้โมเดลทำนายเวลาแต่ละรอบ
-    บวก pace offset ที่ calibrate จากนักแข่งจริงและ pit loss ที่ประมาณจากสนามนั้น แล้วรวมเป็นเวลาทั้งการแข่งขัน —
-    ทำพร้อมกันทั้งกริดจริงของสนามที่เลือกเพื่อจัดอันดับและคำนวณ win probability
+    Once a strategy is defined (tyre + pit lap), the system generates the feature set for every lap, predicts each lap time with the model, adds a pace offset calibrated to the real driver, and includes the estimated pit loss for that circuit. It then combines the results for the full grid to rank drivers and calculate win probability.
   </p>
 </section>
 
@@ -93,13 +83,11 @@
 <section aria-labelledby="opt-h">
   <div class="section-head">
     <span class="section-no">04</span>
-    <h2 class="section-title" id="opt-h">Optimization — ค้นหากลยุทธ์ที่เร็วกว่า</h2>
+    <h2 class="section-title" id="opt-h">Optimization — search for faster strategies</h2>
     <span class="section-note">Strategy Analysis</span>
   </div>
   <p class="section-sub">
-    Grid search ไล่ชุดยาง/รอบพิทที่เป็นไปได้ทั้งหมดของสนามนั้น เทียบเวลารวมกับกลยุทธ์จริงที่นักแข่งใช้
-    แล้วจำแนกกลยุทธ์ที่เร็วกว่าเป็น undercut/overcut ตามรอบพิทเทียบ baseline รายละเอียดและคำอธิบายศัพท์
-    ดูได้ที่ <a href="{{ url_for('analysis_page') }}" style="color: var(--brand); text-decoration: underline">Strategy Analysis</a>
+    Grid search evaluates every feasible tyre and pit-lap combination for the circuit, compares the total time with the real strategy used by the driver, and classifies faster options as undercut or overcut based on the pit lap relative to the baseline. See the details and terminology in the <a href="{{ url_for('analysis_page') }}" style="color: var(--brand); text-decoration: underline">Strategy Analysis</a>
   </p>
 </section>
 
@@ -109,7 +97,7 @@
 <section aria-labelledby="explore-h">
   <div class="section-head">
     <span class="section-no">05</span>
-    <h2 class="section-title" id="explore-h">สำรวจต่อ</h2>
+    <h2 class="section-title" id="explore-h">Continue exploring</h2>
   </div>
   <div class="hero-actions">
     <a class="btn" href="{{ url_for('analysis_page') }}">
