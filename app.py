@@ -35,6 +35,9 @@ model        = obj["model"]
 feature_cols = obj["features"]
 MODEL_MAE    = obj.get("mae",  0.72)
 MODEL_RMSE   = obj.get("rmse", 1.53)
+# The model is trained with all cores; cap inference parallelism to avoid spawning
+# joblib workers for every prediction on resource-constrained web instances.
+model.set_params(n_jobs=1)
 # meta ต่อ combo ที่ใช้เทรนจริงทั้งหมด (บันทึกไว้ตอน train_model_advanced.py รัน) — ใช้รายงาน
 # "เทรนจากกี่ combo/lap จริง" บนหน้า About แทน COMBOS ซึ่งเป็นแค่ตัวอย่าง 18 combo ที่สุ่มมา
 # โชว์บน Model Report (ถ้าเอา COMBOS มาคำนวณ จะรายงานตัวเลขต่ำกว่าที่เทรนจริงมาก)

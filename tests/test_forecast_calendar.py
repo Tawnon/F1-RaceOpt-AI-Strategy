@@ -8,6 +8,9 @@ import app
 
 
 class ForecastCalendarTests(unittest.TestCase):
+    def test_loaded_model_limits_inference_to_one_worker(self):
+        self.assertEqual(app.model.n_jobs, 1)
+
     def test_forecast_calendar_matches_full_2026_season(self):
         source = pathlib.Path(__file__).resolve().parents[1] / "app.py"
         tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))

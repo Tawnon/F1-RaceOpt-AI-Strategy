@@ -21,7 +21,7 @@ python fetch_media.py             # one-off: cache real driver/circuit photos to
 
 ## Deploying
 
-`Dockerfile` runs the app with `gunicorn` (never the `debug=True` dev server). `requirements.txt` is currently unpinned; if `model.pkl` gets retrained, re-check it loads cleanly under whatever `scikit-learn` version is installed — a big version jump risks an `InconsistentVersionWarning` or, worse, a broken unpickle (see the "Training data gotcha" note above for what else to check after a retrain). `.dockerignore` excludes `cache/2023_*` (old, unused season data kept in git per a deliberate choice, but not worth shipping to production — see the file's comment) from the built image. `render.yaml` is a Render Blueprint (`docker` env) for one-click deploy; Railway auto-detects the `Dockerfile` with no extra config.
+`Dockerfile` runs the app with `gunicorn` (never the `debug=True` dev server). The Random Forest is trained with `n_jobs=-1`, but the app caps inference at `n_jobs=1` to avoid spawning joblib worker pools on every prediction in resource-constrained web instances. `requirements.txt` is currently unpinned; if `model.pkl` gets retrained, re-check it loads cleanly under whatever `scikit-learn` version is installed — a big version jump risks an `InconsistentVersionWarning` or, worse, a broken unpickle (see the "Training data gotcha" note above for what else to check after a retrain). `.dockerignore` excludes `cache/2023_*` (old, unused season data kept in git per a deliberate choice, but not worth shipping to production — see the file's comment) from the built image. `render.yaml` is a Render Blueprint (`docker` env) for one-click deploy; Railway auto-detects the `Dockerfile` with no extra config.
 
 ## Architecture
 
