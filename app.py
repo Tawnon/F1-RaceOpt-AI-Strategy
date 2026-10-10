@@ -1116,9 +1116,8 @@ def forecast_page():
     result = None
     leaderboard = []
     error_msg = None
-    # โชว์เสมอไม่ว่าจะกด "คาดเดาอันดับ" แล้วหรือยัง — ไม่ขึ้นกับสนามที่เลือกคาดเดาเลย จึงไม่ควร
-    # รอให้ submit ฟอร์มก่อนถึงจะเห็นว่าระบบเคยทายสนามที่จบไปแล้วถูกแค่ไหน
-    completed_validation = _completed_race_validation()
+    validation_requested = request.args.get("validation") == "1"
+    completed_validation = _completed_race_validation() if validation_requested else []
 
     if request.method == "POST" or request.args.get("race_key"):
         try:
@@ -1163,6 +1162,7 @@ def forecast_page():
         selected_race_key=selected_race_key,
         race_label=race_info["label"],
         result=result, leaderboard=leaderboard, error=error_msg,
+        validation_requested=validation_requested,
         page_date=date.today().isoformat(),
     )
 

@@ -2,6 +2,7 @@ import ast
 import pathlib
 import unittest
 from datetime import date
+from unittest.mock import patch
 
 import app
 
@@ -65,6 +66,22 @@ class ForecastCalendarTests(unittest.TestCase):
     def test_completed_validation_is_cached(self):
         self.assertTrue(hasattr(app._load_fastf1_2026_results, "cache_info"))
         self.assertTrue(hasattr(app._load_fastf1_2026_results, "cache_clear"))
+
+    def test_forecast_landing_page_skips_historical_validation(self):
+        with patch.object(app, "_completed_race_validation") as validation:
+            response = app.app.test_client().get("/forecast")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Load model validation", response.data)
+        validation.assert_not_called()
+
+    def test_historical_validation_is_loaded_when_requested(self):
+        with patch.object(app, "_completed_race_validation", return_value=[]) as validation:
+            response = app.app.test_client().get("/forecast?validation=1")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"No completed 2026 race results are available", response.data)
+        validation.assert_called_once_with()
 
 
 if __name__ == "__main__":
