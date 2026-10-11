@@ -16,7 +16,7 @@
 
 ## วิธีการทำงาน (High-level)
 
-1. **`data_pipeline.py`** ดึงข้อมูล lap-by-lap จริงจาก FastF1 (พร้อม disk cache ใน `cache/`) แปลงเป็น feature เช่น `TyreLife`, `FuelEst`, `StintLap`, `Compound`/`TrackStatus` (one-hot) และยังให้ helper อื่นๆ (ตารางฤดูกาล, pit loss จริง, สภาพอากาศ, incidents) ที่อ่านจาก cache อย่างเดียวเมื่อทำได้ เพื่อไม่ให้แต่ละหน้าต้องรอ network
+1. **`data_pipeline.py`** ดึงข้อมูล lap-by-lap จริงจาก FastF1 (พร้อม disk cache ใน `cache/`) แปลงเป็น feature เช่น `TyreLife`, `FuelEst`, `StintLap`, `Compound`/`TrackStatus` (one-hot) และยังให้ helper อื่นๆ (ตารางฤดูกาล, pit loss จริง, สภาพอากาศ, incidents) ที่อ่านจาก cache อย่างเดียวเมื่อทำได้ เพื่อไม่ให้แต่ละหน้าต้องรอ network; production bundles the 2025 race schedule so app startup does not need FastF1 network access
 2. **`train_model_advanced.py`** เทรน `RandomForestRegressor` จากข้อมูลหลาย race/นักแข่ง แล้วบันทึกโมเดล + รายชื่อ feature ลง `model.pkl`
 3. **`strategy_optimizer.py`** และ **`race_simulator.py`** ใช้ `model.pkl` จำลองเวลาต่อรอบของกลยุทธ์ต่างๆ (batch predict ครั้งเดียวต่อสนาม ไม่ใช่ทีละ lap) แล้วรวมเป็นเวลาทั้ง race — ความเร็วของนักแข่งแต่ละคนมาจาก pace offset จริงที่ calibrate จาก lap cache ของเขา ไม่ใช่ one-hot ต่อนักแข่งในโมเดล (จึง generalize ไปยังนักแข่งที่ไม่มีอยู่ในชุดเทรนได้)
 4. **`media.py`** / **`fetch_media.py`** จัดการรูปนักแข่ง/สนามและข้อมูลทีมจริง (จาก OpenF1 + Wikimedia) — อ่านจากดิสก์เท่านั้นตอน app รัน ไม่ fetch สด

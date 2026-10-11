@@ -43,7 +43,7 @@ model.set_params(n_jobs=1)
 # โชว์บน Model Report (ถ้าเอา COMBOS มาคำนวณ จะรายงานตัวเลขต่ำกว่าที่เทรนจริงมาก)
 TRAINED_META = obj.get("meta", [])
 
-LATEST_SEASON       = get_latest_completed_season()
+LATEST_SEASON       = get_latest_completed_season(allow_network=False)
 AVAILABLE_RACES     = get_available_races(LATEST_SEASON)
 _default_race_key   = next(iter(AVAILABLE_RACES))
 _default_total_laps = AVAILABLE_RACES[_default_race_key]["laps"]

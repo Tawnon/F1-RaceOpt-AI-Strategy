@@ -7,16 +7,21 @@
 import os
 import pickle
 import datetime
+import json
 import fastf1
 import pandas as pd
 
 
-def get_latest_completed_season() -> int:
+def get_latest_completed_season(allow_network: bool = True) -> int:
     """
     หาปี (ฤดูกาล) ล่าสุดที่แข่งจบครบทุกสนามแล้ว
     เทียบวันที่ของสนามสุดท้ายในตารางกับวันนี้ ถ้ายังไม่จบ ใช้ปีก่อนหน้าแทน
+    ปิด network ได้สำหรับ app startup เพื่อไม่ให้รอ FastF1 ก่อนเปิด HTTP port
     """
     now = datetime.datetime.now()
+    if not allow_network:
+        return now.year - 1
+
     try:
         sched = fastf1.get_event_schedule(now.year, include_testing=False)
         if not sched.empty and sched["EventDate"].max().to_pydatetime() < now:
@@ -75,6 +80,14 @@ def _load_season_schedule(year: int):
     if os.path.exists(cache_path):
         with open(cache_path, "rb") as f:
             return pickle.load(f)
+
+    bundled_path = os.path.join(
+        os.path.dirname(__file__), "static", "data", f"season_{year}.json"
+    )
+    if os.path.exists(bundled_path):
+        with open(bundled_path, "r", encoding="utf-8") as f:
+            schedule = json.load(f)
+        return schedule["races"], schedule["drivers"]
 
     races, drivers = _build_season_schedule(year)
     if not races:

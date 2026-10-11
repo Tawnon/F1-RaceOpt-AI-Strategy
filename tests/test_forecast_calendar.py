@@ -5,11 +5,30 @@ from datetime import date
 from unittest.mock import patch
 
 import app
+import data_pipeline
 
 
 class ForecastCalendarTests(unittest.TestCase):
     def test_loaded_model_limits_inference_to_one_worker(self):
         self.assertEqual(app.model.n_jobs, 1)
+
+    def test_app_season_selection_does_not_fetch_fastf1_schedule(self):
+        with patch.object(data_pipeline.fastf1, "get_event_schedule") as get_schedule:
+            season = data_pipeline.get_latest_completed_season(allow_network=False)
+
+        self.assertEqual(season, date.today().year - 1)
+        get_schedule.assert_not_called()
+
+    def test_bundled_schedule_avoids_loading_every_race_from_fastf1(self):
+        with (
+            patch.object(data_pipeline, "_season_cache_path", return_value="missing-cache.pkl"),
+            patch.object(data_pipeline, "_build_season_schedule") as build_schedule,
+        ):
+            races, drivers = data_pipeline._load_season_schedule(2025)
+
+        self.assertEqual(len(races), 24)
+        self.assertEqual(len(drivers), 24)
+        build_schedule.assert_not_called()
 
     def test_forecast_calendar_matches_full_2026_season(self):
         source = pathlib.Path(__file__).resolve().parents[1] / "app.py"
