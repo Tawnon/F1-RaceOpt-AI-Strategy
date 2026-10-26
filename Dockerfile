@@ -9,8 +9,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-EXPOSE 5000
+EXPOSE 10000
 
 # $PORT มาจาก Render/Railway ตอน deploy จริง — ใช้ 5000 เป็นค่า default ตอนรันเองในเครื่อง
 # ต้องใช้ sh -c เพื่อให้ ${PORT:-5000} ขยายค่าได้ (JSON exec-form ธรรมดาไม่รองรับ env var expansion)
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-5000} --workers 1 --threads 2 --timeout 120 app:app"]
+CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT:-10000} --workers 1 --threads 2 --timeout 120 app:app"]
