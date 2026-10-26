@@ -22,6 +22,11 @@ app = Flask(__name__)
 app.jinja_env.globals["driver_photo"] = media.driver_photo
 app.jinja_env.globals["circuit_photo"] = media.circuit_photo
 
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}, 200
+
 # เปิด disk cache ของ FastF1 ไว้ระดับ app สำหรับ session.load() ที่หน้า Future Standings
 # เรียกตรงๆ (ไม่ผ่าน data_pipeline.py) ไม่งั้นจะดึงข้อมูลจากเน็ตใหม่ทุกครั้งแม้เคยโหลดมาแล้ว
 _fastf1_cache_dir = os.path.join("cache", "fastf1")
@@ -195,9 +200,10 @@ def _time_to_seconds(value):
 def _forecast_reference_lap_pace() -> float:
     """ประมาณ pace เฉลี่ย (วินาที/รอบ) จาก COMBOS จริงที่มีอยู่ ใช้เป็น baseline
     คำนวณ global_offset ของสนามที่ยังไม่ได้แข่ง (ไม่มีเวลาจริงให้เทียบ)"""
-    if not COMBOS:
+    combos = _get_combos()
+    if not combos:
         return 95.0
-    return float(np.median([c["real_total"] / c["laps"] for c in COMBOS if c["laps"]]))
+    return float(np.median([c["real_total"] / c["laps"] for c in combos if c["laps"]]))
 
 
 MAX_VALIDATION_RACES = 6
@@ -228,6 +234,7 @@ def _load_fastf1_2026_results(day_key: str | None = None):
             if session.results.empty:
                 continue
             winner = session.results.iloc[0]
+            winner_code = winner.get("Abbreviation")
             race_time = winner.get("Time")
             if race_time is None or pd.isna(race_time):
                 continue
@@ -243,12 +250,21 @@ def _load_fastf1_2026_results(day_key: str | None = None):
             for _, drow in session.results.iterrows():
                 code = drow.get("Abbreviation")
                 gap_time = drow.get("Time")
-                if not code or gap_time is None or pd.isna(gap_time):
+                if not code:
                     continue
-                gap_seconds = (
-                    gap_time.total_seconds() if hasattr(gap_time, "total_seconds")
-                    else _time_to_seconds(str(gap_time))
-                )
+                # FastF1 stores the winner's *total race time* in Time, while
+                # the other rows contain their gap to the winner.  Treating
+                # the winner's total as a gap gives the actual winner a huge
+                # synthetic pace penalty (roughly a full race per lap).
+                if code == winner_code:
+                    gap_seconds = 0.0
+                else:
+                    if gap_time is None or pd.isna(gap_time):
+                        continue
+                    gap_seconds = (
+                        gap_time.total_seconds() if hasattr(gap_time, "total_seconds")
+                        else _time_to_seconds(str(gap_time))
+                    )
                 if gap_seconds < 0:
                     continue
                 driver_gaps.append({"driver": str(code), "gap_seconds": float(gap_seconds)})
@@ -334,16 +350,26 @@ def _predict_grid_results(total_laps: int, race_year: int, real_total: float, dr
     if driver_pace is None:
         driver_pace = _driver_form_pace(date.today().isoformat())
 
+    # A missing driver's form is unknown.  Do not turn roster order into a
+    # performance ranking: the old ``1.0 + index * 0.09`` fallback made the
+    # first/earliest roster entry systematically fastest.
+    known_paces = [float(value) for value in driver_pace.values()]
+    fallback_pace = float(np.median(known_paces)) if known_paces else 0.0
+    neutral_grid_position = 10.5
+
     strategies = []
     for index, code in enumerate(FORECAST_DRIVER_ROSTER):
-        pace = driver_pace.get(code, 1.0 + index * 0.09) + global_offset
+        pace = driver_pace.get(code, fallback_pace) + global_offset
         strategies.append(DriverStrategy(
             code=code,
             first_compound=best["first_compound"],
             second_compound=best["second_compound"],
             pit_lap=best["pit_lap"],
             pace_offset=pace,
-            grid_position=index + 1,
+            # Future races have no real starting grid yet.  A neutral value
+            # prevents alphabetical roster order from becoming a hidden
+            # predictor through the model's Position feature.
+            grid_position=neutral_grid_position,
         ))
 
     predictor = LapPredictor(model=model, features=feature_cols)
@@ -509,7 +535,13 @@ def _build_combos():
     return combos
 
 
-COMBOS = _build_combos()
+@lru_cache(maxsize=1)
+def _get_combos():
+    """Build validation examples only when a page actually needs them."""
+    return _build_combos()
+
+
+COMBOS = None
 
 
 def _build_driver_races():
@@ -799,14 +831,15 @@ def model_report_page():
     ]
     features = _build_feature_rows(model, feature_cols)
 
-    train_combos = COMBOS
+    combos = _get_combos()
+    train_combos = combos
     mae_overall  = MODEL_MAE
     rmse_overall = MODEL_RMSE
     # "evaluated" ตั้งใจแยกจาก "trained" — COMBOS คือตัวอย่าง 18 combo ที่สุ่มโชว์เป็น demo
     # ตรวจสอบด้านล่าง ไม่ใช่ทั้งหมดที่เทรนจริง (ดู trained_combo_count/trained_laps_total
     # ด้านล่างที่มาจาก TRAINED_META ซึ่งเป็น meta ของทุก combo ที่ใช้ .fit() จริง)
-    total_laps_evaluated = sum(c["laps"] for c in COMBOS)
-    avg_diff_pct = round(sum(c["diff_pct"] for c in COMBOS) / len(COMBOS), 2) if COMBOS else 0.0
+    total_laps_evaluated = sum(c["laps"] for c in combos)
+    avg_diff_pct = round(sum(c["diff_pct"] for c in combos) / len(combos), 2) if combos else 0.0
 
     trained_combo_count  = len(TRAINED_META)
     trained_laps_total   = sum(m.get("total_laps", 0) for m in TRAINED_META)
@@ -814,7 +847,7 @@ def model_report_page():
 
     from itertools import combinations as _comb
     groups = {}
-    for c in COMBOS:
+    for c in combos:
         groups.setdefault((c["year"], c["gp"]), []).append(c)
     same_param_compare = []
     for (year, gp), drivers in groups.items():
@@ -832,7 +865,7 @@ def model_report_page():
         {"driver": c["driver"], "gp": c["gp"], "year": c["year"],
          "real_total": c["real_total"], "sim_total": c["sim_total"],
          "diff_pct": c["diff_pct"]}
-        for c in COMBOS
+        for c in combos
     ]
 
     return render_template(
@@ -934,7 +967,7 @@ def play_strategy_page():
         # หา global_offset จากข้อมูลจริงของสนามที่เลือก (จาก combo ที่คำนวณจริงในหน้า Model Report)
         # เพื่อให้เวลา simulation ทั้งกริดใกล้เคียงเวลาจริง
         race_stats = next(
-            (c for c in COMBOS if c["round"] == race_info["gp"] and c["year"] == race_info["year"]),
+            (c for c in _get_combos() if c["round"] == race_info["gp"] and c["year"] == race_info["year"]),
             None
         )
         real_total = race_stats["real_total"] if race_stats else race_info["laps"] * 95.0

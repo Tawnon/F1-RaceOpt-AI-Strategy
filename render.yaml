@@ -4,4 +4,4 @@ services:
     env: docker
     dockerfilePath: ./Dockerfile
     plan: free
-    healthCheckPath: /
+    healthCheckPath: /healthz
