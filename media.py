@@ -7,11 +7,12 @@
 แล้วฝั่ง template ข้ามการแสดงรูปนั้นไปเงียบๆ แทน
 """
 import json
-import os
+from pathlib import Path
 
-_DRIVER_DIR = os.path.join("static", "img", "drivers")
-_CIRCUIT_DIR = os.path.join("static", "img", "circuits")
-_DRIVER_META_PATH = os.path.join("static", "data", "drivers.json")
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+_DRIVER_DIR = _STATIC_DIR / "img" / "drivers"
+_CIRCUIT_DIR = _STATIC_DIR / "img" / "circuits"
+_DRIVER_META_PATH = _STATIC_DIR / "data" / "drivers.json"
 _driver_meta_cache = None
 
 
@@ -20,7 +21,7 @@ def driver_photo(code):
     if not code or code == "YOU":
         return None
     fname = f"{code.upper()}.jpg"
-    if os.path.exists(os.path.join(_DRIVER_DIR, fname)):
+    if (_DRIVER_DIR / fname).exists():
         return f"img/drivers/{fname}"
     return None
 
@@ -32,7 +33,7 @@ def circuit_photo(race_key):
         return None
     slug = race_key.split("_", 1)[1] if "_" in race_key else race_key
     fname = f"{slug}.jpg"
-    if os.path.exists(os.path.join(_CIRCUIT_DIR, fname)):
+    if (_CIRCUIT_DIR / fname).exists():
         return f"img/circuits/{fname}"
     return None
 
@@ -42,7 +43,7 @@ def driver_meta_list():
     driver_number) โหลดจากดิสก์ครั้งเดียวแล้ว cache ไว้ใน memory — [] ถ้ายังไม่เคยรัน fetch_media.py"""
     global _driver_meta_cache
     if _driver_meta_cache is None:
-        if os.path.exists(_DRIVER_META_PATH):
+        if _DRIVER_META_PATH.exists():
             with open(_DRIVER_META_PATH, "r", encoding="utf-8") as f:
                 _driver_meta_cache = json.load(f)
         else:

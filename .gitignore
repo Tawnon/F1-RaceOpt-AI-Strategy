@@ -10,6 +10,7 @@ venv/
 cache/
 colab/cache/
 colab/catboost_info/
+public/
 
 # Editor / OS
 .vscode/

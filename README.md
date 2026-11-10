@@ -58,6 +58,10 @@ docker build -t raceopt .
 docker run -p 5000:5000 raceopt
 ```
 
+### Deploy บน Vercel
+
+Vercel ตรวจจับ Flask จาก `app.py` และติดตั้งแพ็กเกจจาก `requirements.txt` อัตโนมัติ โดย `pyproject.toml` เรียก `build_vercel.py` เพื่อคัดลอกไฟล์จาก `static/` ไปยัง `public/static/` สำหรับเสิร์ฟผ่าน CDN ไม่ต้องกำหนด Build Command เองใน Project Settings ส่วน cache ที่เกิดระหว่างรันจะเก็บใน `/tmp` และอาจถูกล้างเมื่อ function หยุดทำงาน
+
 ### รันเทสต์
 
 ```bash

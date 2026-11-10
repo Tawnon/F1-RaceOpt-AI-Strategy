@@ -8,8 +8,39 @@ import os
 import pickle
 import datetime
 import json
+import tempfile
+from pathlib import Path
 import fastf1
 import pandas as pd
+
+_PROJECT_DIR = Path(__file__).resolve().parent
+_BUNDLED_CACHE_DIR = _PROJECT_DIR / "cache"
+_RUNTIME_CACHE_DIR = Path(os.environ.get(
+    "RACEOPT_CACHE_DIR",
+    os.path.join(tempfile.gettempdir(), "raceopt-cache")
+    if os.environ.get("VERCEL")
+    else str(_BUNDLED_CACHE_DIR),
+))
+
+
+def _cache_path(filename: str) -> str:
+    runtime_path = _RUNTIME_CACHE_DIR / filename
+    bundled_path = _BUNDLED_CACHE_DIR / filename
+    if runtime_path.exists():
+        return str(runtime_path)
+    if bundled_path.exists():
+        return str(bundled_path)
+    return str(runtime_path)
+
+
+def _cache_dir(name: str = "") -> str:
+    return str(_RUNTIME_CACHE_DIR / name)
+
+
+def _cache_dirs():
+    if _RUNTIME_CACHE_DIR == _BUNDLED_CACHE_DIR:
+        return [_BUNDLED_CACHE_DIR]
+    return [_RUNTIME_CACHE_DIR, _BUNDLED_CACHE_DIR]
 
 
 def get_latest_completed_season(allow_network: bool = True) -> int:
@@ -32,7 +63,7 @@ def get_latest_completed_season(allow_network: bool = True) -> int:
 
 
 def _season_cache_path(year: int) -> str:
-    return os.path.join("cache", f"season_{year}.pkl")
+    return _cache_path(f"season_{year}.pkl")
 
 
 def _build_season_schedule(year: int):
@@ -41,7 +72,7 @@ def _build_season_schedule(year: int):
     รายชื่อนักแข่งจริงที่ลงแข่งแต่ละสนาม (โหลดเฉพาะ results ไม่โหลด telemetry
     เพื่อความเร็ว) แล้ว cache ผลลงดิสก์เพื่อไม่ต้องดึงซ้ำทุกครั้งที่ start app
     """
-    cache_dir = os.path.join("cache", f"schedule_{year}")
+    cache_dir = _cache_dir(f"schedule_{year}")
     os.makedirs(cache_dir, exist_ok=True)
     fastf1.Cache.enable_cache(cache_dir)
 
@@ -81,9 +112,7 @@ def _load_season_schedule(year: int):
         with open(cache_path, "rb") as f:
             return pickle.load(f)
 
-    bundled_path = os.path.join(
-        os.path.dirname(__file__), "static", "data", f"season_{year}.json"
-    )
+    bundled_path = _PROJECT_DIR / "static" / "data" / f"season_{year}.json"
     if os.path.exists(bundled_path):
         with open(bundled_path, "r", encoding="utf-8") as f:
             schedule = json.load(f)
@@ -93,7 +122,7 @@ def _load_season_schedule(year: int):
     if not races:
         raise ValueError(f"ไม่พบข้อมูลสนามแข่งของฤดูกาล {year}")
 
-    os.makedirs("cache", exist_ok=True)
+    os.makedirs(_cache_dir(), exist_ok=True)
     with open(cache_path, "wb") as f:
         pickle.dump((races, drivers), f)
     return races, drivers
@@ -120,7 +149,7 @@ def try_load_cached_race_laps(year, gp, driver):
     ใช้ตอนต้องการข้อมูลจริงแบบเร็ว (เช่น จำลองทั้งกริด) โดยไม่ยอมให้ request ช้าเพราะรอ network
     """
     cache_key = f"{year}_{gp}_{driver}".replace(" ", "_")
-    cache_path = os.path.join("cache", f"{cache_key}.pkl")
+    cache_path = _cache_path(f"{cache_key}.pkl")
     if not os.path.exists(cache_path):
         return None
     with open(cache_path, "rb") as f:
@@ -136,14 +165,14 @@ def get_race_weather(year, gp):
     (ไม่ผูกกับ driver เหมือน load_race_laps) เพื่อไม่ต้องคำนวณซ้ำต่อนักแข่ง
     """
     cache_key = f"{year}_{gp}_weather".replace(" ", "_")
-    cache_path = os.path.join("cache", f"{cache_key}.pkl")
-    os.makedirs("cache", exist_ok=True)
+    cache_path = _cache_path(f"{cache_key}.pkl")
+    os.makedirs(_cache_dir(), exist_ok=True)
 
     if os.path.exists(cache_path):
         with open(cache_path, "rb") as f:
             return pickle.load(f)
 
-    cache_dir = os.path.join("cache", f"{year}_{str(gp).replace(' ', '_')}")
+    cache_dir = _cache_dir(f"{year}_{str(gp).replace(' ', '_')}")
     os.makedirs(cache_dir, exist_ok=True)
     fastf1.Cache.enable_cache(cache_dir)
 
@@ -171,14 +200,14 @@ def get_race_grid(year, gp):
     ข้อมูลระดับสนาม cache แยกจาก load_race_laps เหมือน get_race_weather
     """
     cache_key = f"{year}_{gp}_grid".replace(" ", "_")
-    cache_path = os.path.join("cache", f"{cache_key}.pkl")
-    os.makedirs("cache", exist_ok=True)
+    cache_path = _cache_path(f"{cache_key}.pkl")
+    os.makedirs(_cache_dir(), exist_ok=True)
 
     if os.path.exists(cache_path):
         with open(cache_path, "rb") as f:
             return pickle.load(f)
 
-    cache_dir = os.path.join("cache", f"{year}_{str(gp).replace(' ', '_')}")
+    cache_dir = _cache_dir(f"{year}_{str(gp).replace(' ', '_')}")
     os.makedirs(cache_dir, exist_ok=True)
     fastf1.Cache.enable_cache(cache_dir)
 
@@ -205,14 +234,14 @@ def get_race_incidents(year, gp):
     จาก FastF1 track_status_data — คืนค่า None ถ้าไม่มีข้อมูล
     """
     cache_key = f"{year}_{gp}_incidents".replace(" ", "_")
-    cache_path = os.path.join("cache", f"{cache_key}.pkl")
-    os.makedirs("cache", exist_ok=True)
+    cache_path = _cache_path(f"{cache_key}.pkl")
+    os.makedirs(_cache_dir(), exist_ok=True)
 
     if os.path.exists(cache_path):
         with open(cache_path, "rb") as f:
             return pickle.load(f)
 
-    cache_dir = os.path.join("cache", f"{year}_{str(gp).replace(' ', '_')}")
+    cache_dir = _cache_dir(f"{year}_{str(gp).replace(' ', '_')}")
     os.makedirs(cache_dir, exist_ok=True)
     fastf1.Cache.enable_cache(cache_dir)
 
@@ -244,24 +273,25 @@ def estimate_pit_loss(year, gp, fallback=22.0):
     """
     import re
     pattern = re.compile(rf"^{year}_{gp}_([A-Z0-9]+)\.pkl$")
-    cache_dir = "cache"
-    if not os.path.isdir(cache_dir):
+    cache_dirs = [path for path in _cache_dirs() if path.is_dir()]
+    if not cache_dirs:
         return fallback
 
-    for fname in os.listdir(cache_dir):
-        if not pattern.match(fname):
-            continue
-        with open(os.path.join(cache_dir, fname), "rb") as f:
-            data, _meta = pickle.load(f)
-        if "IsInLap" not in data.columns or "LapTimeSec" not in data.columns:
-            continue
-        normal = data.loc[data["IsInLap"] == 0, "LapTimeSec"]
-        in_lap = data.loc[data["IsInLap"] == 1, "LapTimeSec"]
-        if len(normal) < 3 or in_lap.empty:
-            continue
-        delta = float(in_lap.median() - normal.median())
-        if 5 <= delta <= 45:  # ช่วงที่สมเหตุสมผลของ pit loss จริง
-            return round(delta, 1)
+    for cache_dir in cache_dirs:
+        for fname in os.listdir(cache_dir):
+            if not pattern.match(fname):
+                continue
+            with open(cache_dir / fname, "rb") as f:
+                data, _meta = pickle.load(f)
+            if "IsInLap" not in data.columns or "LapTimeSec" not in data.columns:
+                continue
+            normal = data.loc[data["IsInLap"] == 0, "LapTimeSec"]
+            in_lap = data.loc[data["IsInLap"] == 1, "LapTimeSec"]
+            if len(normal) < 3 or in_lap.empty:
+                continue
+            delta = float(in_lap.median() - normal.median())
+            if 5 <= delta <= 45:  # ช่วงที่สมเหตุสมผลของ pit loss จริง
+                return round(delta, 1)
 
     return fallback
 
@@ -274,15 +304,15 @@ def load_race_laps(year=2023, gp="Bahrain", driver="VER"):
     """
     # ── Disk cache ──────────────────────────────────
     cache_key  = f"{year}_{gp}_{driver}".replace(" ", "_")
-    cache_path = os.path.join("cache", f"{cache_key}.pkl")
-    os.makedirs("cache", exist_ok=True)
+    cache_path = _cache_path(f"{cache_key}.pkl")
+    os.makedirs(_cache_dir(), exist_ok=True)
 
     if os.path.exists(cache_path):
         with open(cache_path, "rb") as f:
             return pickle.load(f)        # ← โหลด cache ทันที
 
     # ── ดึงจาก FastF1 (ครั้งแรก) ──────────────────
-    cache_dir = os.path.join("cache", f"{year}_{str(gp).replace(' ', '_')}")
+    cache_dir = _cache_dir(f"{year}_{str(gp).replace(' ', '_')}")
     os.makedirs(cache_dir, exist_ok=True)
     fastf1.Cache.enable_cache(cache_dir)
 
@@ -352,7 +382,7 @@ def load_race_laps(year=2023, gp="Bahrain", driver="VER"):
             "wet":        bool(wd["Rainfall"].any()),
         }
     # เขียน weather cache แยกไว้เลย (race-level) กันไม่ต้องโหลด session ซ้ำใน get_race_weather
-    weather_cache_path = os.path.join("cache", f"{year}_{gp}_weather".replace(" ", "_") + ".pkl")
+    weather_cache_path = _cache_path(f"{year}_{gp}_weather".replace(" ", "_") + ".pkl")
     if not os.path.exists(weather_cache_path):
         with open(weather_cache_path, "wb") as f:
             pickle.dump(weather, f)

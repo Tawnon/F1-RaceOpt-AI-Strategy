@@ -2,6 +2,7 @@
 from flask import Flask, render_template, request, url_for, abort
 import os, pickle, re
 from pathlib import Path
+import tempfile
 from datetime import date, datetime
 from functools import lru_cache
 import numpy as np
@@ -29,12 +30,15 @@ def healthz():
 
 # เปิด disk cache ของ FastF1 ไว้ระดับ app สำหรับ session.load() ที่หน้า Future Standings
 # เรียกตรงๆ (ไม่ผ่าน data_pipeline.py) ไม่งั้นจะดึงข้อมูลจากเน็ตใหม่ทุกครั้งแม้เคยโหลดมาแล้ว
-_fastf1_cache_dir = os.path.join("cache", "fastf1")
+_PROJECT_DIR = Path(__file__).resolve().parent
+_fastf1_cache_dir = os.path.join(
+    tempfile.gettempdir(), "raceopt-fastf1"
+) if os.environ.get("VERCEL") else str(_PROJECT_DIR / "cache" / "fastf1")
 os.makedirs(_fastf1_cache_dir, exist_ok=True)
 fastf1.Cache.enable_cache(_fastf1_cache_dir)
 
 # ── โหลดโมเดล ────────────────────────────────────────────
-with open("model.pkl", "rb") as f:
+with open(_PROJECT_DIR / "model.pkl", "rb") as f:
     obj = pickle.load(f)
 model        = obj["model"]
 feature_cols = obj["features"]
@@ -454,7 +458,7 @@ def _discover_cached_combos(races: dict, max_combos: int = 18):
     """
     round_to_race = {info["gp"]: info for info in races.values()}
     by_round: dict = {}
-    cache_dir = Path("cache")
+    cache_dir = _PROJECT_DIR / "cache"
     if cache_dir.exists():
         for f in cache_dir.glob("*.pkl"):
             m = _CACHE_COMBO_RE.match(f.name)
