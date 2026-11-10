@@ -3,13 +3,7 @@
   "functions": {
     "app.py": {
       "maxDuration": 120,
-      "includeFiles": [
-        "model.pkl",
-        "templates/**",
-        "cache/**",
-        "static/data/**",
-        "static/img/**"
-      ]
+      "includeFiles": "{model.pkl,templates/**,cache/**,static/data/**,static/img/**}"
     }
   }
 }
